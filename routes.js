@@ -297,6 +297,50 @@ router.post('/attendance/bulk', authMiddleware, ownerOnlyMiddleware, async (req,
   }
 });
 
+// Register Face Embedding for a Labourer
+router.put('/labours/:id/face', authMiddleware, async (req, res) => {
+  try {
+    const { faceEmbedding } = req.body;
+    if (!faceEmbedding || !Array.isArray(faceEmbedding) || faceEmbedding.length === 0) {
+      return res.status(400).json({ message: 'faceEmbedding array is required' });
+    }
+    const labour = await Labour.findByIdAndUpdate(
+      req.params.id,
+      { $set: { faceEmbedding } },
+      { new: true }
+    );
+    if (!labour) return res.status(404).json({ message: 'Labourer not found' });
+    res.json({ message: 'Face embedding registered successfully', labour });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Mark Attendance for a single Labourer (Kiosk Mode)
+router.post('/attendance/mark', authMiddleware, async (req, res) => {
+  try {
+    const { labourId, status } = req.body;
+    if (!labourId) {
+      return res.status(400).json({ message: 'labourId is required' });
+    }
+    const recordStatus = status || 'present';
+    
+    // Strip time to store clean date (midnight UTC)
+    const today = new Date();
+    today.setUTCHours(0,0,0,0);
+
+    const record = await Attendance.findOneAndUpdate(
+      { labourId, date: today },
+      { $set: { status: recordStatus, permissionHours: 0, remarks: 'Marked via Face Recognition Kiosk' } },
+      { upsert: true, new: true }
+    );
+
+    res.json({ message: 'Attendance marked successfully', record });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Expense / Cash Book Routes
 router.get('/expenses', authMiddleware, async (req, res) => {
   try {

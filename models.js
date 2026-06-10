@@ -22,6 +22,7 @@ const LabourSchema = new mongoose.Schema({
   phonePeNumber: { type: String, default: '' },
   upiId: { type: String, default: '' },
   phonePeQrUrl: { type: String, default: '' },
+  faceEmbedding: { type: [Number], default: [] },
   createdAt: { type: Date, default: Date.now }
 });
 
