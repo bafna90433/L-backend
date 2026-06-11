@@ -3,7 +3,7 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const ImageKit = require('imagekit');
-const { User, Labour, Attendance, CashTx, AdvanceRequest, Reminder, Task, Message, Department } = require('./models');
+const { User, Labour, Attendance, CashTx, AdvanceRequest, Reminder, Task, Message, Department, SystemSettings } = require('./models');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
 
@@ -297,16 +297,36 @@ router.post('/attendance/bulk', authMiddleware, ownerOnlyMiddleware, async (req,
   }
 });
 
-// Register Face Embedding for a Labourer
+// Register Face Embedding & optional face profile image for a Labourer
 router.put('/labours/:id/face', authMiddleware, async (req, res) => {
   try {
-    const { faceEmbedding } = req.body;
+    const { faceEmbedding, faceImage } = req.body;
     if (!faceEmbedding || !Array.isArray(faceEmbedding) || faceEmbedding.length === 0) {
       return res.status(400).json({ message: 'faceEmbedding array is required' });
     }
+
+    let imageUrl = undefined;
+    if (faceImage) {
+      try {
+        const uploadResponse = await imagekit.upload({
+          file: faceImage, // Base64 image string
+          fileName: `labour_face_${req.params.id}.jpg`,
+          folder: '/labourers'
+        });
+        imageUrl = uploadResponse.url;
+      } catch (err) {
+        console.error('ImageKit upload error during face registration:', err);
+      }
+    }
+
+    const updateFields = { faceEmbedding };
+    if (imageUrl) {
+      updateFields.imageUrl = imageUrl;
+    }
+
     const labour = await Labour.findByIdAndUpdate(
       req.params.id,
-      { $set: { faceEmbedding } },
+      { $set: updateFields },
       { new: true }
     );
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
@@ -905,6 +925,45 @@ router.delete('/departments/:id', authMiddleware, ownerOnlyMiddleware, async (re
     const dept = await Department.findByIdAndDelete(req.params.id);
     if (!dept) return res.status(404).json({ message: 'Department not found' });
     res.json({ message: 'Department deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// System Settings Routes
+router.get('/settings/:key', authMiddleware, async (req, res) => {
+  try {
+    const { key } = req.params;
+    let setting = await SystemSettings.findOne({ key });
+    if (!setting) {
+      // Return default values for known keys
+      if (key === 'kiosk_hours') {
+        return res.json({
+          key,
+          value: { startHour: 8, startMinute: 30, endHour: 20, endMinute: 30 }
+        });
+      }
+      return res.status(404).json({ message: `Setting with key ${key} not found` });
+    }
+    res.json(setting);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/settings/:key', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { value } = req.body;
+    if (value === undefined) {
+      return res.status(400).json({ message: 'Value is required' });
+    }
+    const setting = await SystemSettings.findOneAndUpdate(
+      { key },
+      { $set: { value, updatedAt: new Date() } },
+      { upsert: true, new: true }
+    );
+    res.json(setting);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

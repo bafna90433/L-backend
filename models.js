@@ -127,6 +127,15 @@ const DepartmentSchema = new mongoose.Schema({
 
 const Department = mongoose.model('Department', DepartmentSchema);
 
+// System Settings Schema
+const SystemSettingsSchema = new mongoose.Schema({
+  key: { type: String, required: true, unique: true },
+  value: { type: mongoose.Schema.Types.Mixed, required: true },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const SystemSettings = mongoose.model('SystemSettings', SystemSettingsSchema);
+
 module.exports = {
   User,
   Labour,
@@ -136,7 +145,8 @@ module.exports = {
   Reminder,
   Task,
   Message,
-  Department
+  Department,
+  SystemSettings
 };
 
 
