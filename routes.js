@@ -749,8 +749,8 @@ router.get('/advances', authMiddleware, async (req, res) => {
     // Staff can see all, Owner can see all
     const requests = await AdvanceRequest.find(query)
       .populate('labourId', 'name whatsapp monthlySalary imageUrl')
-      .populate('requestedBy', 'name username')
-      .populate('approvedBy', 'name username')
+      .populate('requestedBy', 'name username role')
+      .populate('approvedBy', 'name username role')
       .sort({ date: -1 });
       
     res.json(requests);
