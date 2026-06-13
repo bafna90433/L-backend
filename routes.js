@@ -734,6 +734,44 @@ router.post('/advances/request', authMiddleware, async (req, res) => {
 
     await request.save();
     res.status(201).json(request);
+});
+
+router.post('/advances/direct', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const { labourId, amount, date, reason } = req.body;
+    if (!labourId || !amount) {
+      return res.status(400).json({ message: 'Labourer ID and amount are required' });
+    }
+
+    const labour = await Labour.findById(labourId);
+    if (!labour) return res.status(404).json({ message: 'Labourer not found' });
+
+    // Create the CashTx expense
+    const tx = new CashTx({
+      txType: 'expense',
+      category: 'salary-advance',
+      amount: parseFloat(amount),
+      date: new Date(date || Date.now()),
+      description: `Direct advance paid to ${labour.name} (By Owner). Reason: ${reason || 'Direct Advance'}`,
+      staffId: req.user._id,
+      labourId
+    });
+    await tx.save();
+
+    // Create and save approved AdvanceRequest
+    const request = new AdvanceRequest({
+      labourId,
+      amount: parseFloat(amount),
+      date: new Date(date || Date.now()),
+      reason: reason || 'Direct Advance',
+      status: 'approved',
+      requestedBy: req.user._id,
+      approvedBy: req.user._id,
+      expenseTxId: tx._id
+    });
+    await request.save();
+
+    res.status(201).json({ message: 'Direct advance recorded successfully', request });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -826,7 +864,7 @@ router.get('/reminders', authMiddleware, async (req, res) => {
 
 router.post('/reminders', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
-    const { message, targetDate } = req.body;
+    const { message, targetDate, type } = req.body;
     if (!message || !targetDate) {
       return res.status(400).json({ message: 'Message and Target Date are required' });
     }
@@ -834,6 +872,7 @@ router.post('/reminders', authMiddleware, ownerOnlyMiddleware, async (req, res) 
     const reminder = new Reminder({
       message,
       targetDate: new Date(targetDate),
+      type: type || 'general',
       createdBy: req.user._id
     });
 

@@ -79,6 +79,7 @@ const ReminderSchema = new mongoose.Schema({
   message: { type: String, required: true },
   targetDate: { type: Date, required: true },
   status: { type: String, enum: ['pending', 'acknowledged'], default: 'pending' },
+  type: { type: String, enum: ['general', 'salary-delay'], default: 'general' },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   acknowledgedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   acknowledgedAt: { type: Date, default: null },
