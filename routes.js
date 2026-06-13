@@ -191,11 +191,29 @@ router.get('/labours', authMiddleware, async (req, res) => {
 
 router.post('/labours', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
-    const { name, whatsapp, monthlySalary, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
+    const { name, whatsapp, monthlySalary, shiftStart, shiftEnd, gender, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     if (!name || !whatsapp || monthlySalary === undefined) {
       return res.status(400).json({ message: 'Name, WhatsApp, and Monthly Salary are required' });
     }
-    const labour = new Labour({ name, whatsapp, monthlySalary, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode });
+    
+    // Calculate workingHours from shiftStart and shiftEnd
+    let computedHours = 8;
+    if (shiftStart && shiftEnd) {
+      const [startH, startM] = shiftStart.split(':').map(Number);
+      const [endH, endM] = shiftEnd.split(':').map(Number);
+      let diff = (endH + endM / 60) - (startH + startM / 60);
+      if (diff < 0) diff += 24; // Crosses midnight
+      computedHours = Number(diff.toFixed(2));
+    }
+
+    const labour = new Labour({ 
+      name, whatsapp, monthlySalary, 
+      shiftStart: shiftStart || '08:30', 
+      shiftEnd: shiftEnd || '20:30',
+      workingHours: computedHours, 
+      gender: gender || 'Male',
+      imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode 
+    });
     await labour.save();
     res.status(201).json(labour);
   } catch (error) {
@@ -205,13 +223,31 @@ router.post('/labours', authMiddleware, ownerOnlyMiddleware, async (req, res) =>
 
 router.put('/labours/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
-    const { name, whatsapp, monthlySalary, imageUrl, status, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
+    const { name, whatsapp, monthlySalary, shiftStart, shiftEnd, gender, imageUrl, status, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     const labour = await Labour.findById(req.params.id);
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
     
     if (name) labour.name = name;
     if (whatsapp) labour.whatsapp = whatsapp;
     if (monthlySalary !== undefined) labour.monthlySalary = monthlySalary;
+    
+    if (gender !== undefined) labour.gender = gender;
+    if (shiftStart !== undefined) labour.shiftStart = shiftStart;
+    if (shiftEnd !== undefined) labour.shiftEnd = shiftEnd;
+    
+    // Recalculate workingHours if shift changes
+    if (shiftStart !== undefined || shiftEnd !== undefined) {
+      const start = shiftStart || labour.shiftStart;
+      const end = shiftEnd || labour.shiftEnd;
+      if (start && end) {
+        const [startH, startM] = start.split(':').map(Number);
+        const [endH, endM] = end.split(':').map(Number);
+        let diff = (endH + endM / 60) - (startH + startM / 60);
+        if (diff < 0) diff += 24;
+        labour.workingHours = Number(diff.toFixed(2));
+      }
+    }
+
     if (imageUrl !== undefined) labour.imageUrl = imageUrl;
     if (status) labour.status = status;
     if (employeeType !== undefined) labour.employeeType = employeeType;
@@ -420,22 +456,23 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
       // Check permission approval status
       const isPermissionApproved = existingRecord ? existingRecord.isPermissionApproved : false;
 
-      // Rule: Expected Standard Shift = 8 hours
-      // If approved, permissionHours = awayHours. Required shift is 8 - permissionHours.
+      // Rule: Expected Standard Shift = labour.workingHours
+      // If approved, permissionHours = awayHours. Required shift is workingHours - permissionHours.
       // If actual activeHours >= required, they are present.
+      const requiredHours = labour.workingHours || 8;
       const permissionHours = isPermissionApproved ? awayHours : 0;
       const effectiveHours = activeHours + permissionHours;
 
       // Determine Status
       let status = 'present';
-      if (effectiveHours < 4) {
+      if (effectiveHours < requiredHours * 0.5) {
         status = 'absent';
-      } else if (effectiveHours < 7) {
+      } else if (effectiveHours < requiredHours * 0.875) {
         status = 'half-day';
       }
 
       // Determine Overtime
-      const overtimeHours = effectiveHours > 8 ? effectiveHours - 8 : 0;
+      const overtimeHours = effectiveHours > requiredHours ? effectiveHours - requiredHours : 0;
 
       // Generate Remarks
       let remarks = `Marked via ZKTeco Machine (${terminal_sn || 'Biometric'})`;
@@ -488,10 +525,12 @@ router.post('/attendance/:id/permission', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'isApproved is required' });
     }
 
-    const record = await Attendance.findById(req.params.id);
+    const record = await Attendance.findById(req.params.id).populate('labourId');
     if (!record) {
       return res.status(404).json({ message: 'Attendance record not found' });
     }
+
+    const requiredHours = (record.labourId && record.labourId.workingHours) ? record.labourId.workingHours : 8;
 
     record.isPermissionApproved = isApproved;
     
@@ -502,15 +541,15 @@ router.post('/attendance/:id/permission', authMiddleware, async (req, res) => {
     const effectiveHours = record.activeHours + permissionHours;
 
     let status = 'present';
-    if (effectiveHours < 4) {
+    if (effectiveHours < requiredHours * 0.5) {
       status = 'absent';
-    } else if (effectiveHours < 7) {
+    } else if (effectiveHours < requiredHours * 0.875) {
       status = 'half-day';
     }
     record.status = status;
 
     // Recalculate Overtime
-    record.overtimeHours = effectiveHours > 8 ? effectiveHours - 8 : 0;
+    record.overtimeHours = effectiveHours > requiredHours ? effectiveHours - requiredHours : 0;
 
     // Recalculate Remarks
     if (isApproved && record.awayHours > 0) {
@@ -1281,6 +1320,38 @@ router.get('/kiosk/settings/kiosk_hours', async (req, res) => {
       return res.json({
         key,
         value: { startHour: 8, startMinute: 30, endHour: 20, endMinute: 30 }
+      });
+    }
+    res.json(setting);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/kiosk/settings/kiosk_location', async (req, res) => {
+  try {
+    const key = 'kiosk_location';
+    let setting = await SystemSettings.findOne({ key });
+    if (!setting) {
+      return res.json({
+        key,
+        value: { lat: 10.997544, lng: 76.878663 }
+      });
+    }
+    res.json(setting);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/kiosk/settings/kiosk_alarm', async (req, res) => {
+  try {
+    const key = 'kiosk_alarm';
+    let setting = await SystemSettings.findOne({ key });
+    if (!setting) {
+      return res.json({
+        key,
+        value: { alarmHour: 8, alarmMinute: 30 }
       });
     }
     res.json(setting);

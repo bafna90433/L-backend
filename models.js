@@ -23,6 +23,10 @@ const LabourSchema = new mongoose.Schema({
   upiId: { type: String, default: '' },
   phonePeQrUrl: { type: String, default: '' },
   faceEmbedding: { type: [Number], default: [] },
+  workingHours: { type: Number, default: 8 },
+  shiftStart: { type: String, default: '08:30' },
+  shiftEnd: { type: String, default: '20:30' },
+  gender: { type: String, enum: ['Male', 'Female', 'Other'], default: 'Male' },
   empCode: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now }
 });
