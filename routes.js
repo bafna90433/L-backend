@@ -625,7 +625,7 @@ router.post('/expenses/cash-received', authMiddleware, ownerOnlyMiddleware, asyn
 // Staff (or Owner) logs an expense
 router.post('/expenses/log', authMiddleware, async (req, res) => {
   try {
-    const { amount, date, category, description, labourId, advanceDeducted } = req.body;
+    const { amount, date, category, description, labourId, advanceDeducted, newAdvanceGiven } = req.body;
     if (!amount || !date || !category) {
       return res.status(400).json({ message: 'Amount, date, and category are required' });
     }
@@ -669,6 +669,22 @@ router.post('/expenses/log', authMiddleware, async (req, res) => {
           await adv.save();
         }
       }
+    }
+
+    // If a new advance is given during salary payment, create a new approved AdvanceRequest
+    if (category === 'salary-payment' && labourId && newAdvanceGiven && parseFloat(newAdvanceGiven) > 0) {
+      const newAdvAmount = parseFloat(newAdvanceGiven);
+      const newAdvRequest = new AdvanceRequest({
+        labourId,
+        amount: newAdvAmount,
+        date: new Date(date || Date.now()),
+        reason: 'Given during salary payment',
+        status: 'approved',
+        requestedBy: req.user._id,
+        approvedBy: req.user._id,
+        expenseTxId: tx._id // Link to this salary payment transaction
+      });
+      await newAdvRequest.save();
     }
 
     res.status(201).json(tx);
