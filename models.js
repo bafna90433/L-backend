@@ -68,6 +68,7 @@ const AdvanceRequestSchema = new mongoose.Schema({
   date: { type: Date, required: true },
   reason: { type: String, default: '' },
   status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+  deductedAmount: { type: Number, default: 0 },
   requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   expenseTxId: { type: mongoose.Schema.Types.ObjectId, ref: 'CashTx', default: null }

@@ -625,7 +625,7 @@ router.post('/expenses/cash-received', authMiddleware, ownerOnlyMiddleware, asyn
 // Staff (or Owner) logs an expense
 router.post('/expenses/log', authMiddleware, async (req, res) => {
   try {
-    const { amount, date, category, description, labourId } = req.body;
+    const { amount, date, category, description, labourId, advanceDeducted } = req.body;
     if (!amount || !date || !category) {
       return res.status(400).json({ message: 'Amount, date, and category are required' });
     }
@@ -645,6 +645,32 @@ router.post('/expenses/log', authMiddleware, async (req, res) => {
     });
 
     await tx.save();
+
+    // If it's a salary payment and advance is deducted, update the AdvanceRequests
+    if (category === 'salary-payment' && labourId && advanceDeducted && parseFloat(advanceDeducted) > 0) {
+      let remainingToDeduct = parseFloat(advanceDeducted);
+      
+      // Find all approved advances for this labourer
+      const approvedAdvances = await AdvanceRequest.find({
+        labourId,
+        status: 'approved'
+      }).sort({ date: 1 }); // oldest first
+      
+      for (const adv of approvedAdvances) {
+        if (remainingToDeduct <= 0) break;
+        
+        const currentDeducted = adv.deductedAmount || 0;
+        const availableToDeduct = adv.amount - currentDeducted;
+        
+        if (availableToDeduct > 0) {
+          const deductNow = Math.min(remainingToDeduct, availableToDeduct);
+          adv.deductedAmount = currentDeducted + deductNow;
+          remainingToDeduct -= deductNow;
+          await adv.save();
+        }
+      }
+    }
+
     res.status(201).json(tx);
   } catch (error) {
     res.status(500).json({ message: error.message });
