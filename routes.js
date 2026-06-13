@@ -689,6 +689,24 @@ router.post('/advances/request', authMiddleware, async (req, res) => {
     const labour = await Labour.findById(labourId);
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
 
+    // Check if there is already an outstanding approved or pending advance
+    const activeAdvances = await AdvanceRequest.find({
+      labourId,
+      status: { $in: ['pending', 'approved'] }
+    });
+
+    const outstandingAdvanceExists = activeAdvances.some(adv => {
+      if (adv.status === 'pending') return true;
+      if (adv.status === 'approved' && (adv.amount - (adv.deductedAmount || 0)) > 0) return true;
+      return false;
+    });
+
+    if (outstandingAdvanceExists) {
+      return res.status(400).json({ 
+        message: 'This employee already has a pending request or an active outstanding advance balance.' 
+      });
+    }
+
     const request = new AdvanceRequest({
       labourId,
       amount,
