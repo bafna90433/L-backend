@@ -32,7 +32,14 @@ const AttendanceSchema = new mongoose.Schema({
   labourId: { type: mongoose.Schema.Types.ObjectId, ref: 'Labour', required: true },
   date: { type: Date, required: true },
   status: { type: String, enum: ['present', 'half-day', 'absent', 'sunday', 'permission'], required: true },
+  checkIn: { type: Date, default: null },
+  checkOut: { type: Date, default: null },
+  punches: { type: [Date], default: [] },
+  activeHours: { type: Number, default: 0 },
+  awayHours: { type: Number, default: 0 },
   permissionHours: { type: Number, default: 0 },
+  isPermissionApproved: { type: Boolean, default: false },
+  overtimeHours: { type: Number, default: 0 },
   remarks: { type: String, default: '' }
 });
 

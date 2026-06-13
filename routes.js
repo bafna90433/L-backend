@@ -381,22 +381,90 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
 
       // Convert punch_time to clean date (midnight UTC)
       const punchDate = new Date(punch_time);
-      punchDate.setUTCHours(0, 0, 0, 0);
+      const cleanPunchDate = new Date(punch_time);
+      cleanPunchDate.setUTCHours(0, 0, 0, 0);
 
-      const status = 'present';
+      // Fetch existing record if any to get punches array and permission status
+      let existingRecord = await Attendance.findOne({ labourId: labour._id, date: cleanPunchDate });
+
+      let currentPunches = existingRecord ? [...existingRecord.punches] : [];
       
+      // Add the new punch if not already present
+      const punchTimeStr = punchDate.toISOString();
+      const alreadyPunched = currentPunches.some(p => new Date(p).toISOString() === punchTimeStr);
+      if (!alreadyPunched) {
+        currentPunches.push(punchDate);
+      }
+
+      // Sort punches chronologically
+      currentPunches.sort((a, b) => new Date(a) - new Date(b));
+
+      // Calculate check-in, check-out, active hours, away hours
+      const checkIn = currentPunches[0];
+      const checkOut = currentPunches.length > 1 ? currentPunches[currentPunches.length - 1] : null;
+
+      let activeMs = 0;
+      let awayMs = 0;
+
+      for (let i = 0; i < currentPunches.length; i++) {
+        if (i % 2 === 1) {
+          activeMs += new Date(currentPunches[i]) - new Date(currentPunches[i - 1]);
+        } else if (i > 0) {
+          awayMs += new Date(currentPunches[i]) - new Date(currentPunches[i - 1]);
+        }
+      }
+
+      const activeHours = activeMs / (1000 * 60 * 60);
+      const awayHours = awayMs / (1000 * 60 * 60);
+
+      // Check permission approval status
+      const isPermissionApproved = existingRecord ? existingRecord.isPermissionApproved : false;
+
+      // Rule: Expected Standard Shift = 8 hours
+      // If approved, permissionHours = awayHours. Required shift is 8 - permissionHours.
+      // If actual activeHours >= required, they are present.
+      const permissionHours = isPermissionApproved ? awayHours : 0;
+      const effectiveHours = activeHours + permissionHours;
+
+      // Determine Status
+      let status = 'present';
+      if (effectiveHours < 4) {
+        status = 'absent';
+      } else if (effectiveHours < 7) {
+        status = 'half-day';
+      }
+
+      // Determine Overtime
+      const overtimeHours = effectiveHours > 8 ? effectiveHours - 8 : 0;
+
+      // Generate Remarks
+      let remarks = `Marked via ZKTeco Machine (${terminal_sn || 'Biometric'})`;
+      if (isPermissionApproved && awayHours > 0) {
+        remarks = `Present (Approved ${awayHours.toFixed(1)}h Permission)`;
+      } else if (overtimeHours > 0) {
+        remarks = `Present (OT: ${overtimeHours.toFixed(1)} hrs)`;
+      }
+
+      // Save update
       await Attendance.findOneAndUpdate(
-        { labourId: labour._id, date: punchDate },
-        { 
-          $set: { 
-            status, 
-            permissionHours: 0, 
-            remarks: `Marked via ZKTeco Machine (${terminal_sn || 'Biometric'})` 
-          } 
+        { labourId: labour._id, date: cleanPunchDate },
+        {
+          $set: {
+            status,
+            checkIn,
+            checkOut,
+            punches: currentPunches,
+            activeHours,
+            awayHours,
+            permissionHours,
+            isPermissionApproved,
+            overtimeHours,
+            remarks
+          }
         },
         { upsert: true }
       );
-      
+
       successCount++;
     }
 
@@ -408,6 +476,54 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
     });
   } catch (error) {
     console.error('ZKTeco Sync Error:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Approve or Reject Permission for an attendance entry
+router.post('/attendance/:id/permission', authMiddleware, async (req, res) => {
+  try {
+    const { isApproved } = req.body;
+    if (isApproved === undefined) {
+      return res.status(400).json({ message: 'isApproved is required' });
+    }
+
+    const record = await Attendance.findById(req.params.id);
+    if (!record) {
+      return res.status(404).json({ message: 'Attendance record not found' });
+    }
+
+    record.isPermissionApproved = isApproved;
+    
+    // Recalculate status and effective hours based on new permission approval status
+    const permissionHours = isApproved ? record.awayHours : 0;
+    record.permissionHours = permissionHours;
+
+    const effectiveHours = record.activeHours + permissionHours;
+
+    let status = 'present';
+    if (effectiveHours < 4) {
+      status = 'absent';
+    } else if (effectiveHours < 7) {
+      status = 'half-day';
+    }
+    record.status = status;
+
+    // Recalculate Overtime
+    record.overtimeHours = effectiveHours > 8 ? effectiveHours - 8 : 0;
+
+    // Recalculate Remarks
+    if (isApproved && record.awayHours > 0) {
+      record.remarks = `Present (Approved ${record.awayHours.toFixed(1)}h Permission)`;
+    } else if (record.overtimeHours > 0) {
+      record.remarks = `Present (OT: ${record.overtimeHours.toFixed(1)} hrs)`;
+    } else {
+      record.remarks = 'Marked via ZKTeco Machine';
+    }
+
+    await record.save();
+    res.json({ message: 'Permission updated successfully', record });
+  } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
