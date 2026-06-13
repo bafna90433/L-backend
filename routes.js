@@ -191,11 +191,11 @@ router.get('/labours', authMiddleware, async (req, res) => {
 
 router.post('/labours', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
-    const { name, whatsapp, monthlySalary, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl } = req.body;
+    const { name, whatsapp, monthlySalary, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     if (!name || !whatsapp || monthlySalary === undefined) {
       return res.status(400).json({ message: 'Name, WhatsApp, and Monthly Salary are required' });
     }
-    const labour = new Labour({ name, whatsapp, monthlySalary, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl });
+    const labour = new Labour({ name, whatsapp, monthlySalary, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode });
     await labour.save();
     res.status(201).json(labour);
   } catch (error) {
@@ -205,7 +205,7 @@ router.post('/labours', authMiddleware, ownerOnlyMiddleware, async (req, res) =>
 
 router.put('/labours/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
-    const { name, whatsapp, monthlySalary, imageUrl, status, employeeType, department, phonePeNumber, upiId, phonePeQrUrl } = req.body;
+    const { name, whatsapp, monthlySalary, imageUrl, status, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     const labour = await Labour.findById(req.params.id);
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
     
@@ -219,6 +219,7 @@ router.put('/labours/:id', authMiddleware, ownerOnlyMiddleware, async (req, res)
     if (phonePeNumber !== undefined) labour.phonePeNumber = phonePeNumber;
     if (upiId !== undefined) labour.upiId = upiId;
     if (phonePeQrUrl !== undefined) labour.phonePeQrUrl = phonePeQrUrl;
+    if (empCode !== undefined) labour.empCode = empCode;
 
     await labour.save();
     res.json(labour);
@@ -297,36 +298,17 @@ router.post('/attendance/bulk', authMiddleware, ownerOnlyMiddleware, async (req,
   }
 });
 
-// Register Face Embedding & optional face profile image for a Labourer
+// Register Face Embedding for a Labourer
 router.put('/labours/:id/face', authMiddleware, async (req, res) => {
   try {
-    const { faceEmbedding, faceImage } = req.body;
+    const { faceEmbedding } = req.body;
     if (!faceEmbedding || !Array.isArray(faceEmbedding) || faceEmbedding.length === 0) {
       return res.status(400).json({ message: 'faceEmbedding array is required' });
     }
 
-    let imageUrl = undefined;
-    if (faceImage) {
-      try {
-        const uploadResponse = await imagekit.upload({
-          file: faceImage, // Base64 image string
-          fileName: `labour_face_${req.params.id}.jpg`,
-          folder: '/labourers'
-        });
-        imageUrl = uploadResponse.url;
-      } catch (err) {
-        console.error('ImageKit upload error during face registration:', err);
-      }
-    }
-
-    const updateFields = { faceEmbedding };
-    if (imageUrl) {
-      updateFields.imageUrl = imageUrl;
-    }
-
     const labour = await Labour.findByIdAndUpdate(
       req.params.id,
-      { $set: updateFields },
+      { $set: { faceEmbedding } },
       { new: true }
     );
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
@@ -357,6 +339,75 @@ router.post('/attendance/mark', authMiddleware, async (req, res) => {
 
     res.json({ message: 'Attendance marked successfully', record });
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Bulk sync attendance logs from ZKTeco biometric machine
+router.post('/attendance/zkteco-sync', async (req, res) => {
+  try {
+    const { token, punches } = req.body;
+    const expectedToken = process.env.ZKTECO_SYNC_TOKEN || 'zkteco_secret_token_2026';
+    if (token !== expectedToken) {
+      return res.status(401).json({ message: 'Unauthorized sync request' });
+    }
+
+    if (!punches || !Array.isArray(punches)) {
+      return res.status(400).json({ message: 'punches array is required' });
+    }
+
+    let successCount = 0;
+    let errors = [];
+
+    // Fetch all active labourers to map them quickly in-memory
+    const activeLabourers = await Labour.find({ status: 'active' });
+
+    for (const punch of punches) {
+      const { empCode, first_name, last_name, punch_time, punch_state, terminal_sn } = punch;
+      
+      // 1. Try to find the labourer by empCode
+      let labour = activeLabourers.find(l => l.empCode === String(empCode));
+      
+      // 2. Fallback to name search if empCode not set
+      if (!labour && first_name) {
+        const fullName = `${first_name} ${last_name || ''}`.trim().toLowerCase();
+        labour = activeLabourers.find(l => l.name.trim().toLowerCase() === fullName);
+      }
+
+      if (!labour) {
+        errors.push({ empCode, name: `${first_name} ${last_name || ''}`, error: 'Labourer not found in MongoDB' });
+        continue;
+      }
+
+      // Convert punch_time to clean date (midnight UTC)
+      const punchDate = new Date(punch_time);
+      punchDate.setUTCHours(0, 0, 0, 0);
+
+      const status = 'present';
+      
+      await Attendance.findOneAndUpdate(
+        { labourId: labour._id, date: punchDate },
+        { 
+          $set: { 
+            status, 
+            permissionHours: 0, 
+            remarks: `Marked via ZKTeco Machine (${terminal_sn || 'Biometric'})` 
+          } 
+        },
+        { upsert: true }
+      );
+      
+      successCount++;
+    }
+
+    res.json({ 
+      message: 'Sync completed', 
+      processed: punches.length, 
+      successCount, 
+      errors 
+    });
+  } catch (error) {
+    console.error('ZKTeco Sync Error:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -963,6 +1014,56 @@ router.post('/settings/:key', authMiddleware, ownerOnlyMiddleware, async (req, r
       { $set: { value, updatedAt: new Date() } },
       { upsert: true, new: true }
     );
+    res.json(setting);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Public routes for Kiosk Mode (bypasses authMiddleware)
+router.get('/kiosk/labours', async (req, res) => {
+  try {
+    const labours = await Labour.find().sort({ name: 1 });
+    res.json(labours);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/kiosk/attendance/mark', async (req, res) => {
+  try {
+    const { labourId, status } = req.body;
+    if (!labourId) {
+      return res.status(400).json({ message: 'labourId is required' });
+    }
+    const recordStatus = status || 'present';
+    
+    // Strip time to store clean date (midnight UTC)
+    const today = new Date();
+    today.setUTCHours(0,0,0,0);
+
+    const record = await Attendance.findOneAndUpdate(
+      { labourId, date: today },
+      { $set: { status: recordStatus, permissionHours: 0, remarks: 'Marked via Face Recognition Kiosk (Public)' } },
+      { upsert: true, new: true }
+    );
+
+    res.json({ message: 'Attendance marked successfully', record });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/kiosk/settings/kiosk_hours', async (req, res) => {
+  try {
+    const key = 'kiosk_hours';
+    let setting = await SystemSettings.findOne({ key });
+    if (!setting) {
+      return res.json({
+        key,
+        value: { startHour: 8, startMinute: 30, endHour: 20, endMinute: 30 }
+      });
+    }
     res.json(setting);
   } catch (error) {
     res.status(500).json({ message: error.message });
