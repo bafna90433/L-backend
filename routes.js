@@ -1289,5 +1289,16 @@ router.get('/kiosk/settings/kiosk_hours', async (req, res) => {
   }
 });
 
+router.get('/kiosk/attendance/status/:labourId', async (req, res) => {
+  try {
+    const today = new Date();
+    today.setUTCHours(0,0,0,0);
+    const record = await Attendance.findOne({ labourId: req.params.labourId, date: today });
+    res.json({ punched: !!record, status: record ? record.status : null });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 module.exports = router;
 
