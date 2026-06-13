@@ -734,6 +734,10 @@ router.post('/advances/request', authMiddleware, async (req, res) => {
 
     await request.save();
     res.status(201).json(request);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: error.message });
+  }
 });
 
 router.post('/advances/direct', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
