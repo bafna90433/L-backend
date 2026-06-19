@@ -1028,6 +1028,24 @@ router.post('/reminders/:id/acknowledge', authMiddleware, async (req, res) => {
   }
 });
 
+// Staff can update the targetDate of an acknowledged reminder (reschedule alarm)
+router.post('/reminders/:id/update-date', authMiddleware, async (req, res) => {
+  try {
+    const reminder = await Reminder.findById(req.params.id);
+    if (!reminder) return res.status(404).json({ message: 'Reminder not found' });
+
+    const { targetDate } = req.body;
+    if (!targetDate) return res.status(400).json({ message: 'targetDate is required' });
+
+    reminder.targetDate = new Date(targetDate);
+    await reminder.save();
+
+    res.json({ message: 'Reminder date updated successfully', reminder });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 router.put('/reminders/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
     const { message, targetDate, targetStaffId } = req.body;
