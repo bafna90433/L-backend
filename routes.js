@@ -1014,6 +1014,9 @@ router.post('/reminders/:id/acknowledge', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'Reminder already acknowledged' });
     }
 
+    const { targetDate } = req.body;
+    if (targetDate) reminder.targetDate = new Date(targetDate);
+
     reminder.status = 'acknowledged';
     reminder.acknowledgedBy = req.user._id;
     reminder.acknowledgedAt = new Date();
