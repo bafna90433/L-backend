@@ -55,7 +55,6 @@ const CashTxSchema = new mongoose.Schema({
   txType: { type: String, enum: ['received', 'expense'], required: true },
   category: { 
     type: String, 
-    enum: ['staff-welfare', 'petrol', 'porter-vehicle', 'miscellaneous', 'sir-expenses', 'salary-advance', 'received', 'salary-payment'],
     required: true 
   },
   amount: { type: Number, required: true },
@@ -82,8 +81,9 @@ const AdvanceRequestSchema = new mongoose.Schema({
 const ReminderSchema = new mongoose.Schema({
   message: { type: String, required: true },
   targetDate: { type: Date, required: true },
-  status: { type: String, enum: ['pending', 'acknowledged'], default: 'pending' },
-  type: { type: String, enum: ['general', 'salary-delay'], default: 'general' },
+  status: { type: String, enum: ['pending', 'acknowledged', 'completed'], default: 'pending' },
+  type: { type: String, enum: ['general', 'salary-delay', 'self'], default: 'general' },
+  targetStaffId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, // null means all staff
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   acknowledgedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   acknowledgedAt: { type: Date, default: null },

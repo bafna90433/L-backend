@@ -440,44 +440,44 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
       const checkOut = currentPunches.length > 1 ? currentPunches[currentPunches.length - 1] : null;
 
       let activeMs = 0;
-      let awayMs = 0;
 
       for (let i = 0; i < currentPunches.length; i++) {
         if (i % 2 === 1) {
           activeMs += new Date(currentPunches[i]) - new Date(currentPunches[i - 1]);
-        } else if (i > 0) {
-          awayMs += new Date(currentPunches[i]) - new Date(currentPunches[i - 1]);
         }
       }
 
       const activeHours = activeMs / (1000 * 60 * 60);
-      const awayHours = awayMs / (1000 * 60 * 60);
-
-      // Check permission approval status
-      const isPermissionApproved = existingRecord ? existingRecord.isPermissionApproved : false;
-
-      // Rule: Expected Standard Shift = labour.workingHours
-      // If approved, permissionHours = awayHours. Required shift is workingHours - permissionHours.
-      // If actual activeHours >= required, they are present.
       const requiredHours = labour.workingHours || 8;
-      const permissionHours = isPermissionApproved ? awayHours : 0;
-      const effectiveHours = activeHours + permissionHours;
 
-      // Determine Status
-      let status = 'present';
-      if (effectiveHours < requiredHours * 0.5) {
-        status = 'absent';
-      } else if (effectiveHours < requiredHours * 0.875) {
-        status = 'half-day';
+      let deficit = requiredHours - activeHours;
+      if (deficit < 0) deficit = 0;
+
+      const gpSetting = await SystemSettings.findOne({ key: 'grace_period' });
+      const gracePeriodMinutes = gpSetting && gpSetting.value !== undefined ? Number(gpSetting.value) : 10;
+      const gracePeriodHours = gracePeriodMinutes / 60;
+
+      if (deficit <= gracePeriodHours) {
+        deficit = 0;
       }
 
-      // Determine Overtime
-      const overtimeHours = effectiveHours > requiredHours ? effectiveHours - requiredHours : 0;
+      const awayHours = deficit;
+      
+      let status = 'present';
+      let isPermissionApproved = false;
 
-      // Generate Remarks
+      if (activeHours === 0) {
+        status = 'absent';
+      } else if (deficit > 0) {
+        status = 'permission';
+        isPermissionApproved = true; // Automatic Compulsory Permission
+      }
+
+      const overtimeHours = activeHours > requiredHours ? activeHours - requiredHours : 0;
+
       let remarks = `Marked via ZKTeco Machine (${terminal_sn || 'Biometric'})`;
-      if (isPermissionApproved && awayHours > 0) {
-        remarks = `Present (Approved ${awayHours.toFixed(1)}h Permission)`;
+      if (status === 'permission') {
+        remarks = `Automatic Permission (${awayHours.toFixed(1)}h deducted)`;
       } else if (overtimeHours > 0) {
         remarks = `Present (OT: ${overtimeHours.toFixed(1)} hrs)`;
       }
@@ -762,16 +762,45 @@ router.post('/advances/request', authMiddleware, async (req, res) => {
       });
     }
 
+    let autoApproveLimit = 0;
+    const limitSetting = await SystemSettings.findOne({ key: 'advance_auto_approval_limit' });
+    if (limitSetting && limitSetting.value !== undefined) {
+      autoApproveLimit = Number(limitSetting.value);
+    }
+
+    const isAutoApproved = parseFloat(amount) <= autoApproveLimit;
+
     const request = new AdvanceRequest({
       labourId,
       amount,
       date: new Date(date),
       reason: reason || '',
-      status: 'pending',
-      requestedBy: req.user._id
+      status: isAutoApproved ? 'approved' : 'pending',
+      requestedBy: req.user._id,
+      approvedBy: isAutoApproved ? req.user._id : undefined
     });
 
     await request.save();
+
+    if (isAutoApproved) {
+      // Create the CashTx expense since it is auto-approved
+      const tx = new CashTx({
+        txType: 'expense',
+        category: 'salary-advance',
+        amount: parseFloat(amount),
+        date: new Date(date || Date.now()),
+        description: `Advance paid to ${labour.name} (Auto-Approved). Reason: ${reason || ''}`,
+        staffId: req.user._id,
+        labourId,
+        advanceRequestId: request._id
+      });
+      await tx.save();
+
+      // Update the request with the transaction ID
+      request.expenseTxId = tx._id;
+      await request.save();
+    }
+
     res.status(201).json(request);
   } catch (error) {
     console.error(error);
@@ -895,9 +924,25 @@ router.post('/advances/:id/reject', authMiddleware, ownerOnlyMiddleware, async (
 // Reminder Routes
 router.get('/reminders', authMiddleware, async (req, res) => {
   try {
-    const reminders = await Reminder.find()
+    let query = {};
+    if (req.user.role === 'owner') {
+      // Owner sees everything except self reminders
+      query = { type: { $ne: 'self' } };
+    } else {
+      // Staff sees general reminders assigned to them or all, plus their own self reminders
+      query = {
+        $or: [
+          { targetStaffId: req.user._id, type: { $ne: 'self' } },
+          { targetStaffId: null, type: { $ne: 'self' } },
+          { createdBy: req.user._id, type: 'self' }
+        ]
+      };
+    }
+    
+    const reminders = await Reminder.find(query)
       .populate('createdBy', 'name username')
       .populate('acknowledgedBy', 'name username')
+      .populate('targetStaffId', 'name username')
       .sort({ createdAt: -1 });
     res.json(reminders);
   } catch (error) {
@@ -905,9 +950,43 @@ router.get('/reminders', authMiddleware, async (req, res) => {
   }
 });
 
+// Self Reminder Route (For staff)
+router.post('/reminders/self', authMiddleware, async (req, res) => {
+  try {
+    const { message, targetDate } = req.body;
+    if (!message || !targetDate) {
+      return res.status(400).json({ message: 'Message and target date are required' });
+    }
+    const reminder = new Reminder({
+      message,
+      targetDate,
+      type: 'self',
+      createdBy: req.user._id
+    });
+    await reminder.save();
+    
+    const populated = await Reminder.findById(reminder._id)
+      .populate('createdBy', 'name username');
+    res.json(populated);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.delete('/reminders/self/:id', authMiddleware, async (req, res) => {
+  try {
+    const reminder = await Reminder.findOne({ _id: req.params.id, createdBy: req.user._id, type: 'self' });
+    if (!reminder) return res.status(404).json({ message: 'Reminder not found or unauthorized' });
+    await Reminder.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Self reminder deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 router.post('/reminders', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
-    const { message, targetDate, type } = req.body;
+    const { message, targetDate, type, targetStaffId } = req.body;
     if (!message || !targetDate) {
       return res.status(400).json({ message: 'Message and Target Date are required' });
     }
@@ -916,6 +995,7 @@ router.post('/reminders', authMiddleware, ownerOnlyMiddleware, async (req, res) 
       message,
       targetDate: new Date(targetDate),
       type: type || 'general',
+      targetStaffId: targetStaffId || null,
       createdBy: req.user._id
     });
 
@@ -945,11 +1025,47 @@ router.post('/reminders/:id/acknowledge', authMiddleware, async (req, res) => {
   }
 });
 
+router.put('/reminders/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const { message, targetDate, targetStaffId } = req.body;
+    const reminder = await Reminder.findById(req.params.id);
+    if (!reminder) return res.status(404).json({ message: 'Reminder not found' });
+
+    if (message) reminder.message = message;
+    if (targetDate) reminder.targetDate = new Date(targetDate);
+    if (targetStaffId !== undefined) reminder.targetStaffId = targetStaffId || null;
+
+    await reminder.save();
+    res.json(reminder);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.delete('/reminders/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const reminder = await Reminder.findByIdAndDelete(req.params.id);
+    if (!reminder) return res.status(404).json({ message: 'Reminder not found' });
+    res.json({ message: 'Reminder deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Helper for task auto-reset
 function checkAndResetTask(task) {
   if (task.status !== 'completed' || !task.completedAt) return false;
-  const now = new Date();
-  const comp = new Date(task.completedAt);
+  
+  const actualNow = new Date();
+  const actualComp = new Date(task.completedAt);
+
+  // Shift the logical day start to 8:30 AM by subtracting 8 hours and 30 minutes.
+  // This means 08:29 AM real-time is treated as 23:59 the previous logical day,
+  // and 08:30 AM real-time is treated as 00:00 of the new logical day.
+  // For 'regular' tasks, they should reset exactly at 12 midnight (00:00 local time).
+  const offsetMs = task.taskType === 'regular' ? 0 : (8 * 60 + 30) * 60 * 1000; // 8.5 hours in milliseconds
+  const now = new Date(actualNow.getTime() - offsetMs);
+  const comp = new Date(actualComp.getTime() - offsetMs);
   
   let shouldReset = false;
   if (task.frequency === 'daily') {
@@ -1098,16 +1214,19 @@ router.post('/tasks/:id/comment', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/tasks/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.put('/tasks/:id', authMiddleware, async (req, res) => {
   try {
     const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup } = req.body;
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
-    
-    if (title !== undefined) task.title = title;
-    if (taskType !== undefined) task.taskType = taskType;
-    if (frequency !== undefined) task.frequency = frequency;
-    if (assignedTo !== undefined) task.assignedTo = assignedTo || null;
+
+    if (req.user.role === 'owner') {
+      if (title !== undefined) task.title = title;
+      if (taskType !== undefined) task.taskType = taskType;
+      if (frequency !== undefined) task.frequency = frequency;
+      if (assignedTo !== undefined) task.assignedTo = assignedTo;
+    }
+
     if (description !== undefined) task.description = description;
     if (remarks !== undefined) task.remarks = remarks;
     if (nextFollowup !== undefined) task.nextFollowup = nextFollowup;
@@ -1189,6 +1308,25 @@ router.post('/messages', authMiddleware, async (req, res) => {
 
     await message.save();
     res.status(201).json(message);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.delete('/messages/:userId', authMiddleware, async (req, res) => {
+  try {
+    const targetId = req.params.userId;
+    const currentUserId = req.user._id;
+    
+    // Delete all messages between current user and target user
+    await Message.deleteMany({
+      $or: [
+        { sender: currentUserId, receiver: targetId },
+        { sender: targetId, receiver: currentUserId }
+      ]
+    });
+    
+    res.json({ message: 'Chat cleared successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

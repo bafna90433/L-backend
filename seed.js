@@ -82,7 +82,7 @@ async function runSeeder() {
     const ownerUser = new User({
       username: 'owner',
       password: hashedOwnerPwd,
-      name: 'Owner Admin',
+      name: 'MD',
       role: 'owner'
     });
     await ownerUser.save();
