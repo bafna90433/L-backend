@@ -1292,7 +1292,9 @@ router.post('/tasks', authMiddleware, async (req, res) => {
       assignedTo: finalAssignedTo || null,
       description: description || '',
       remarks: remarks || '',
-      nextFollowup: nextFollowup || ''
+      nextFollowup: nextFollowup || '',
+      seenByOwner: req.user.role === 'owner',
+      seenAt: req.user.role === 'owner' ? new Date() : null
     });
     await task.save();
     res.status(201).json(task);
@@ -1310,6 +1312,26 @@ router.post('/tasks/:id/complete', authMiddleware, async (req, res) => {
     task.completedBy = req.user._id;
     task.completedAt = new Date();
     await task.save();
+    
+    const populated = await Task.findById(task._id)
+      .populate('assignedTo', 'name username')
+      .populate('completedBy', 'name username');
+    res.json(populated);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/tasks/:id/seen', authMiddleware, async (req, res) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+    
+    if (req.user.role === 'owner') {
+      task.seenByOwner = true;
+      task.seenAt = new Date();
+      await task.save();
+    }
     
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')

@@ -117,6 +117,8 @@ const TaskSchema = new mongoose.Schema({
     text: { type: String, required: true },
     createdAt: { type: Date, default: Date.now }
   }],
+  seenByOwner: { type: Boolean, default: false },
+  seenAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 
