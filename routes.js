@@ -14,6 +14,31 @@ const imagekit = new ImageKit({
   urlEndpoint: process.env.IMAGEKIT_URL_ENDPOINT || 'https://ik.imagekit.io/rishii'
 });
 
+// Ensure virtual "Company Expenses" labourer exists in database
+const ensureCompanyExpensesLabour = async () => {
+  try {
+    const existing = await Labour.findOne({ empCode: 'COMPANY' });
+    if (!existing) {
+      const companyLabour = new Labour({
+        name: 'Company Expenses',
+        whatsapp: 'Not Provided',
+        monthlySalary: 0,
+        status: 'active',
+        employeeType: 'labourer',
+        department: 'Company',
+        empCode: 'COMPANY',
+        imageUrl: 'https://images.unsplash.com/photo-1454165804606-c3d57bc86b40?auto=format&fit=crop&q=80&w=100'
+      });
+      await companyLabour.save();
+      console.log('Virtual Company Expenses labourer created.');
+    }
+  } catch (err) {
+    console.error('Error ensuring Company Expenses labourer:', err);
+  }
+};
+// Run after a short delay to ensure DB is connected
+setTimeout(ensureCompanyExpensesLabour, 3000);
+
 // Middleware for JWT authentication
 const authMiddleware = async (req, res, next) => {
   try {
@@ -88,7 +113,8 @@ router.post('/auth/login', async (req, res) => {
         name: user.name,
         role: user.role,
         whatsapp: user.whatsapp || '',
-        imageUrl: user.imageUrl || ''
+        imageUrl: user.imageUrl || '',
+        upiId: user.upiId || ''
       }
     });
   } catch (error) {
@@ -103,13 +129,14 @@ router.get('/auth/me', authMiddleware, async (req, res) => {
 
 router.put('/auth/profile', authMiddleware, async (req, res) => {
   try {
-    const { name, whatsapp, imageUrl } = req.body;
+    const { name, whatsapp, imageUrl, upiId } = req.body;
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     if (name !== undefined) user.name = name;
     if (whatsapp !== undefined) user.whatsapp = whatsapp;
     if (imageUrl !== undefined) user.imageUrl = imageUrl;
+    if (upiId !== undefined) user.upiId = upiId;
 
     await user.save();
     res.json({ 
@@ -120,7 +147,8 @@ router.put('/auth/profile', authMiddleware, async (req, res) => {
         name: user.name,
         role: user.role,
         whatsapp: user.whatsapp,
-        imageUrl: user.imageUrl
+        imageUrl: user.imageUrl,
+        upiId: user.upiId || ''
       } 
     });
   } catch (error) {
@@ -189,7 +217,7 @@ router.get('/labours', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/labours', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.post('/labours', authMiddleware, async (req, res) => {
   try {
     const { name, whatsapp, monthlySalary, shiftStart, shiftEnd, gender, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     if (!name || !whatsapp || monthlySalary === undefined) {
@@ -221,7 +249,7 @@ router.post('/labours', authMiddleware, ownerOnlyMiddleware, async (req, res) =>
   }
 });
 
-router.put('/labours/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.put('/labours/:id', authMiddleware, async (req, res) => {
   try {
     const { name, whatsapp, monthlySalary, shiftStart, shiftEnd, gender, imageUrl, status, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     const labour = await Labour.findById(req.params.id);
@@ -264,7 +292,7 @@ router.put('/labours/:id', authMiddleware, ownerOnlyMiddleware, async (req, res)
   }
 });
 
-router.delete('/labours/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.delete('/labours/:id', authMiddleware, async (req, res) => {
   try {
     const labour = await Labour.findByIdAndDelete(req.params.id);
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
@@ -605,6 +633,7 @@ router.get('/expenses/balance', authMiddleware, async (req, res) => {
       'porter-vehicle': 0,
       'sir-expenses': 0,
       'salary-advance': 0,
+      'company-expenses': 0,
       'miscellaneous': 0
     };
 
@@ -632,16 +661,24 @@ router.get('/expenses/balance', authMiddleware, async (req, res) => {
 });
 
 // Owner gives cash to office staff (received transaction)
-router.post('/expenses/cash-received', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.post('/expenses/cash-received', authMiddleware, async (req, res) => {
   try {
-    const { amount, date, description, staffId } = req.body;
-    if (!amount || !date || !staffId) {
+    const { amount, date, description, staffId, paymentMode } = req.body;
+    
+    // If the creator is staff, force the receiver (staffId) to be themselves.
+    // If owner, they can specify any staff member's ID.
+    let targetStaffId = staffId;
+    if (req.user.role !== 'owner') {
+      targetStaffId = req.user._id;
+    }
+
+    if (!amount || !date || !targetStaffId) {
       return res.status(400).json({ message: 'Amount, date, and staffId are required' });
     }
 
-    // Verify staffId exists and is staff
-    const staffUser = await User.findById(staffId);
-    if (!staffUser || staffUser.role !== 'staff') {
+    // Verify staffId exists and is staff or staff2
+    const staffUser = await User.findById(targetStaffId);
+    if (!staffUser || (staffUser.role !== 'staff' && staffUser.role !== 'staff2')) {
       return res.status(400).json({ message: 'Valid staff member must be selected to receive the cash' });
     }
 
@@ -651,7 +688,8 @@ router.post('/expenses/cash-received', authMiddleware, ownerOnlyMiddleware, asyn
       amount,
       date: new Date(date),
       description: description || `Cash received from owner`,
-      staffId
+      paymentMode: paymentMode || 'handcash',
+      staffId: targetStaffId
     });
 
     await tx.save();
@@ -664,7 +702,7 @@ router.post('/expenses/cash-received', authMiddleware, ownerOnlyMiddleware, asyn
 // Staff (or Owner) logs an expense
 router.post('/expenses/log', authMiddleware, async (req, res) => {
   try {
-    const { amount, date, category, description, labourId, advanceDeducted, newAdvanceGiven } = req.body;
+    const { amount, date, category, description, labourId, advanceDeducted, newAdvanceGiven, paymentMode } = req.body;
     if (!amount || !date || !category) {
       return res.status(400).json({ message: 'Amount, date, and category are required' });
     }
@@ -679,6 +717,7 @@ router.post('/expenses/log', authMiddleware, async (req, res) => {
       amount,
       date: new Date(date),
       description: description || '',
+      paymentMode: paymentMode || 'handcash',
       staffId: req.user._id,
       labourId: labourId || null
     });
@@ -744,22 +783,26 @@ router.post('/advances/request', authMiddleware, async (req, res) => {
     const labour = await Labour.findById(labourId);
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
 
-    // Check if there is already an outstanding approved or pending advance
-    const activeAdvances = await AdvanceRequest.find({
-      labourId,
-      status: { $in: ['pending', 'approved'] }
-    });
+    const isCompanyExpense = labour.empCode === 'COMPANY' || labour.name === 'Company Expenses';
 
-    const outstandingAdvanceExists = activeAdvances.some(adv => {
-      if (adv.status === 'pending') return true;
-      if (adv.status === 'approved' && (adv.amount - (adv.deductedAmount || 0)) > 0) return true;
-      return false;
-    });
-
-    if (outstandingAdvanceExists) {
-      return res.status(400).json({ 
-        message: 'This employee already has a pending request or an active outstanding advance balance.' 
+    if (!isCompanyExpense) {
+      // Check if there is already an outstanding approved or pending advance
+      const activeAdvances = await AdvanceRequest.find({
+        labourId,
+        status: { $in: ['pending', 'approved'] }
       });
+
+      const outstandingAdvanceExists = activeAdvances.some(adv => {
+        if (adv.status === 'pending') return true;
+        if (adv.status === 'approved' && (adv.amount - (adv.deductedAmount || 0)) > 0) return true;
+        return false;
+      });
+
+      if (outstandingAdvanceExists) {
+        return res.status(400).json({ 
+          message: 'This employee already has a pending request or an active outstanding advance balance.' 
+        });
+      }
     }
 
     let autoApproveLimit = 0;
@@ -783,15 +826,18 @@ router.post('/advances/request', authMiddleware, async (req, res) => {
     await request.save();
 
     if (isAutoApproved) {
-      // Create the CashTx expense since it is auto-approved
+      // Create the CashTx transaction since it is auto-approved
+      // If it's a company expense request, it is an INFLOW (received cash) for the staff!
       const tx = new CashTx({
-        txType: 'expense',
-        category: 'salary-advance',
+        txType: isCompanyExpense ? 'received' : 'expense',
+        category: isCompanyExpense ? 'received' : 'salary-advance',
         amount: parseFloat(amount),
         date: new Date(date || Date.now()),
-        description: `Advance paid to ${labour.name} (Auto-Approved). Reason: ${reason || ''}`,
+        description: isCompanyExpense 
+          ? `Cash received for Company Expenses (Auto-Approved). Reason: ${reason || ''}`
+          : `Advance paid to ${labour.name} (Auto-Approved). Reason: ${reason || ''}`,
         staffId: req.user._id,
-        labourId,
+        labourId: isCompanyExpense ? null : labourId,
         advanceRequestId: request._id
       });
       await tx.save();
@@ -859,7 +905,7 @@ router.get('/advances', authMiddleware, async (req, res) => {
     // Staff can see all, Owner can see all
     const requests = await AdvanceRequest.find(query)
       .populate('labourId', 'name whatsapp monthlySalary imageUrl')
-      .populate('requestedBy', 'name username role')
+      .populate('requestedBy', 'name username role upiId')
       .populate('approvedBy', 'name username role')
       .sort({ date: -1 });
       
@@ -877,17 +923,24 @@ router.post('/advances/:id/approve', authMiddleware, ownerOnlyMiddleware, async 
       return res.status(400).json({ message: 'Request has already been processed' });
     }
 
+    const { paymentMode } = req.body;
+
     // Populate labourer details to write transaction description
     const labour = await Labour.findById(request.labourId);
+    const isCompanyExpense = labour && (labour.empCode === 'COMPANY' || labour.name === 'Company Expenses');
 
-    // Create the CashTx expense
+    // Create the CashTx transaction
     const tx = new CashTx({
-      txType: 'expense',
-      category: 'salary-advance',
+      txType: isCompanyExpense ? 'received' : 'expense',
+      category: isCompanyExpense ? 'received' : 'salary-advance',
       amount: request.amount,
       date: request.date,
-      description: `Advance paid to ${labour ? labour.name : 'Labourer'} (Approved by Owner). Reason: ${request.reason}`,
-      staffId: request.requestedBy // Logged under the staff who requested it
+      description: isCompanyExpense
+        ? `Cash received for Company Expenses (Approved by Owner). Reason: ${request.reason}`
+        : `Advance paid to ${labour ? labour.name : 'Labourer'} (Approved by Owner). Reason: ${request.reason}`,
+      staffId: request.requestedBy, // Logged under the staff who requested it
+      labourId: isCompanyExpense ? null : request.labourId,
+      paymentMode: paymentMode || 'handcash'
     });
     await tx.save();
 
@@ -1150,17 +1203,24 @@ router.get('/tasks', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/tasks', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.post('/tasks', authMiddleware, async (req, res) => {
   try {
     const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup } = req.body;
     if (!title) {
       return res.status(400).json({ message: 'Task title is required' });
     }
+    
+    // If the creator is not an owner, automatically assign it to themselves
+    let finalAssignedTo = assignedTo;
+    if (req.user.role !== 'owner') {
+      finalAssignedTo = req.user._id;
+    }
+
     const task = new Task({
       title,
       taskType: taskType || 'custom',
       frequency: frequency || 'one-time',
-      assignedTo: assignedTo || null,
+      assignedTo: finalAssignedTo || null,
       description: description || '',
       remarks: remarks || '',
       nextFollowup: nextFollowup || ''
@@ -1241,10 +1301,17 @@ router.put('/tasks/:id', authMiddleware, async (req, res) => {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
-    if (req.user.role === 'owner') {
+    const isOwner = req.user.role === 'owner';
+    const isAssignee = task.assignedTo && task.assignedTo.toString() === req.user._id.toString();
+
+    // If owner or the staff member assigned to the task is editing
+    if (isOwner || isAssignee) {
       if (title !== undefined) task.title = title;
       if (taskType !== undefined) task.taskType = taskType;
       if (frequency !== undefined) task.frequency = frequency;
+    }
+
+    if (isOwner) {
       if (assignedTo !== undefined) task.assignedTo = assignedTo;
     }
 

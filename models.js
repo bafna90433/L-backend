@@ -7,7 +7,8 @@ const UserSchema = new mongoose.Schema({
   name: { type: String, required: true },
   role: { type: String, enum: ['owner', 'staff', 'staff2'], required: true },
   whatsapp: { type: String, default: '' },
-  imageUrl: { type: String, default: '' }
+  imageUrl: { type: String, default: '' },
+  upiId: { type: String, default: '' }
 });
 
 // Labour Schema
@@ -60,6 +61,7 @@ const CashTxSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   date: { type: Date, required: true },
   description: { type: String, default: '' },
+  paymentMode: { type: String, enum: ['online', 'handcash'], default: 'handcash' },
   staffId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   labourId: { type: mongoose.Schema.Types.ObjectId, ref: 'Labour', default: null }
 });
