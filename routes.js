@@ -627,6 +627,11 @@ router.get('/expenses/balance', authMiddleware, async (req, res) => {
     
     let totalReceived = 0;
     let totalSpent = 0;
+    let onlineReceived = 0;
+    let onlineSpent = 0;
+    let handCashReceived = 0;
+    let handCashSpent = 0;
+
     const categoryTotals = {
       'staff-welfare': 0,
       'petrol': 0,
@@ -640,8 +645,18 @@ router.get('/expenses/balance', authMiddleware, async (req, res) => {
     txs.forEach(tx => {
       if (tx.txType === 'received') {
         totalReceived += tx.amount;
+        if (tx.paymentMode === 'online') {
+          onlineReceived += tx.amount;
+        } else {
+          handCashReceived += tx.amount;
+        }
       } else {
         totalSpent += tx.amount;
+        if (tx.paymentMode === 'online') {
+          onlineSpent += tx.amount;
+        } else {
+          handCashSpent += tx.amount;
+        }
         if (categoryTotals[tx.category] !== undefined) {
           categoryTotals[tx.category] += tx.amount;
         }
@@ -649,10 +664,15 @@ router.get('/expenses/balance', authMiddleware, async (req, res) => {
     });
 
     const activeBalance = totalReceived - totalSpent;
+    const onlineBalance = onlineReceived - onlineSpent;
+    const handCashBalance = handCashReceived - handCashSpent;
+
     res.json({
       totalReceived,
       totalSpent,
       activeBalance,
+      onlineBalance,
+      handCashBalance,
       categoryTotals
     });
   } catch (error) {
@@ -1032,6 +1052,25 @@ router.delete('/reminders/self/:id', authMiddleware, async (req, res) => {
     if (!reminder) return res.status(404).json({ message: 'Reminder not found or unauthorized' });
     await Reminder.findByIdAndDelete(req.params.id);
     res.json({ message: 'Self reminder deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.put('/reminders/self/:id', authMiddleware, async (req, res) => {
+  try {
+    const { message, targetDate } = req.body;
+    if (!message && !targetDate) {
+      return res.status(400).json({ message: 'At least one field (message or targetDate) is required to update' });
+    }
+    const reminder = await Reminder.findOne({ _id: req.params.id, createdBy: req.user._id, type: 'self' });
+    if (!reminder) return res.status(404).json({ message: 'Personal reminder not found or unauthorized' });
+
+    if (message) reminder.message = message;
+    if (targetDate) reminder.targetDate = new Date(targetDate);
+    await reminder.save();
+
+    res.json({ message: 'Personal reminder updated successfully', reminder });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
