@@ -791,6 +791,36 @@ router.post('/expenses/log', authMiddleware, async (req, res) => {
   }
 });
 
+// Edit a cash transaction (CashTx)
+router.put('/expenses/:id', authMiddleware, async (req, res) => {
+  try {
+    const { amount, date, category, description, paymentMode } = req.body;
+    
+    // Staff can only edit their own logs unless they are the owner
+    let query = { _id: req.params.id };
+    if (req.user.role !== 'owner') {
+      query.staffId = req.user._id;
+    }
+
+    const tx = await CashTx.findOne(query);
+    if (!tx) {
+      return res.status(404).json({ message: 'Transaction not found or unauthorized' });
+    }
+
+    // Apply updates
+    if (amount !== undefined) tx.amount = Number(amount);
+    if (date !== undefined) tx.date = new Date(date);
+    if (category !== undefined && tx.txType === 'expense') tx.category = category;
+    if (description !== undefined) tx.description = description;
+    if (paymentMode !== undefined) tx.paymentMode = paymentMode;
+
+    await tx.save();
+    res.json({ message: 'Transaction updated successfully', transaction: tx });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Advance Requests Routes
 router.post('/advances/request', authMiddleware, async (req, res) => {
   try {
