@@ -808,14 +808,44 @@ router.put('/expenses/:id', authMiddleware, async (req, res) => {
     }
 
     // Apply updates
+    if (req.body.txType !== undefined) {
+      tx.txType = req.body.txType;
+    }
     if (amount !== undefined) tx.amount = Number(amount);
     if (date !== undefined) tx.date = new Date(date);
-    if (category !== undefined && tx.txType === 'expense') tx.category = category;
+    
+    if (tx.txType === 'received') {
+      tx.category = 'received';
+    } else if (category !== undefined) {
+      tx.category = category;
+    }
+    
     if (description !== undefined) tx.description = description;
     if (paymentMode !== undefined) tx.paymentMode = paymentMode;
 
     await tx.save();
     res.json({ message: 'Transaction updated successfully', transaction: tx });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Delete a cash transaction (CashTx)
+router.delete('/expenses/:id', authMiddleware, async (req, res) => {
+  try {
+    // Staff can only delete their own logs unless they are the owner
+    let query = { _id: req.params.id };
+    if (req.user.role !== 'owner') {
+      query.staffId = req.user._id;
+    }
+
+    const tx = await CashTx.findOne(query);
+    if (!tx) {
+      return res.status(404).json({ message: 'Transaction not found or unauthorized' });
+    }
+
+    await CashTx.deleteOne({ _id: req.params.id });
+    res.json({ message: 'Transaction deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
