@@ -7,6 +7,47 @@ const { User, Labour, Attendance, CashTx, AdvanceRequest, Reminder, Task, Messag
 
 const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
 
+const sendWhatsAppCloudMessage = async (to, message) => {
+  const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const graphVersion = process.env.WHATSAPP_GRAPH_VERSION || 'v23.0';
+  if (!accessToken || !phoneNumberId) {
+    const error = new Error('WhatsApp Cloud API is not configured on the server');
+    error.statusCode = 503;
+    throw error;
+  }
+  const normalizedNumber = String(to || '').replace(/\D/g, '');
+  if (!normalizedNumber) {
+    const error = new Error('A valid WhatsApp number is required in your profile');
+    error.statusCode = 400;
+    throw error;
+  }
+  const response = await fetch(
+    `https://graph.facebook.com/${graphVersion}/${phoneNumberId}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: normalizedNumber,
+        type: 'text',
+        text: { preview_url: false, body: String(message).slice(0, 4000) }
+      })
+    }
+  );
+  const payload = await response.json();
+  if (!response.ok) {
+    const error = new Error(payload?.error?.message || 'WhatsApp delivery failed');
+    error.statusCode = response.status;
+    throw error;
+  }
+  return payload;
+};
+
 // Initialize ImageKit
 const imagekit = new ImageKit({
   publicKey: process.env.IMAGEKIT_PUBLIC_KEY || 'public_LB0AyCgim15VO491kDtVm0Fo798=',
@@ -1055,6 +1096,20 @@ router.post('/advances/:id/reject', authMiddleware, ownerOnlyMiddleware, async (
 });
 
 // Reminder Routes
+router.post('/automation/whatsapp', authMiddleware, async (req, res) => {
+  try {
+    const message = String(req.body?.message || '').trim();
+    if (!message) return res.status(400).json({ message: 'Message is required' });
+    const result = await sendWhatsAppCloudMessage(req.user.whatsapp, message);
+    res.json({
+      sent: true,
+      messageId: result?.messages?.[0]?.id || null
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message });
+  }
+});
+
 router.get('/reminders', authMiddleware, async (req, res) => {
   try {
     let query = {};
@@ -1719,4 +1774,3 @@ router.get('/kiosk/attendance/status/:labourId', async (req, res) => {
 });
 
 module.exports = router;
-
