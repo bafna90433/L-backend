@@ -1114,8 +1114,8 @@ router.get('/reminders', authMiddleware, async (req, res) => {
   try {
     let query = {};
     if (req.user.role === 'owner') {
-      // Owner sees everything except self reminders
-      query = { type: { $ne: 'self' } };
+      // Owner sees everything including staff personal reminders
+      query = {};
     } else {
       // Staff sees general reminders assigned to them or all, plus their own self reminders
       query = {
