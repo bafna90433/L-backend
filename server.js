@@ -1,8 +1,8 @@
 require('dotenv').config();
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const { connectDatabase } = require('./database');
 const apiRoutes = require('./routes');
 
 const app = express();
@@ -32,18 +32,16 @@ if (process.env.NODE_ENV === 'production') {
   // We can serve static files here if needed
 }
 
-// Connect to MongoDB
-const mongoUri = process.env.MONGO_URI || 'mongodb+srv://Labour:Labour123@labour.ajkpera.mongodb.net/LabourManagement?retryWrites=true&w=majority';
-console.log('Connecting to MongoDB...');
+console.log(`Connecting to ${(process.env.DATABASE_PROVIDER || 'mongodb').toLowerCase()} database...`);
 
-mongoose.connect(mongoUri)
-  .then(() => {
-    console.log('Connected to MongoDB successfully!');
+connectDatabase()
+  .then(({ provider }) => {
+    console.log(`Connected to ${provider} successfully!`);
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
     });
   })
   .catch((err) => {
-    console.error('MongoDB connection error:', err);
+    console.error('Database connection error:', err);
     process.exit(1);
   });

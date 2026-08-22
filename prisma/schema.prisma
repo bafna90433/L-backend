@@ -1,0 +1,195 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id       String @id @default(uuid())
+  username String @unique
+  password String
+  name     String
+  role     String
+  whatsapp String @default("")
+  imageUrl String @default("")
+  upiId    String @default("")
+
+  cashTransactions      CashTx[]         @relation("CashTxStaff")
+  requestedAdvances     AdvanceRequest[] @relation("AdvanceRequester")
+  approvedAdvances      AdvanceRequest[] @relation("AdvanceApprover")
+  createdReminders      Reminder[]       @relation("ReminderCreator")
+  targetedReminders     Reminder[]       @relation("ReminderTarget")
+  acknowledgedReminders Reminder[]       @relation("ReminderAcknowledger")
+  assignedTasks         Task[]           @relation("TaskAssignee")
+  completedTasks        Task[]           @relation("TaskCompleter")
+  sentMessages          Message[]        @relation("MessageSender")
+  receivedMessages      Message[]        @relation("MessageReceiver")
+}
+
+model Labour {
+  id            String   @id @default(uuid())
+  name          String
+  whatsapp      String
+  monthlySalary Float
+  imageUrl      String   @default("")
+  status        String   @default("active")
+  employeeType  String   @default("labourer")
+  department    String   @default("")
+  phonePeNumber String   @default("")
+  upiId         String   @default("")
+  phonePeQrUrl  String   @default("")
+  faceEmbedding Float[]  @default([])
+  workingHours  Float    @default(8)
+  shiftStart    String   @default("08:30")
+  shiftEnd      String   @default("20:30")
+  gender        String   @default("Male")
+  empCode       String   @default("")
+  createdAt     DateTime @default(now())
+
+  attendance       Attendance[]
+  cashTransactions CashTx[]
+  advanceRequests  AdvanceRequest[]
+
+  @@index([name])
+  @@index([status])
+  @@index([empCode])
+}
+
+model Attendance {
+  id                   String     @id @default(uuid())
+  labourId             String
+  date                 DateTime
+  status               String
+  checkIn              DateTime?
+  checkOut             DateTime?
+  punches              DateTime[] @default([])
+  activeHours          Float      @default(0)
+  awayHours            Float      @default(0)
+  permissionHours      Float      @default(0)
+  isPermissionApproved Boolean    @default(false)
+  overtimeHours        Float      @default(0)
+  remarks              String     @default("")
+
+  labour Labour @relation(fields: [labourId], references: [id], onDelete: Restrict)
+
+  @@unique([labourId, date])
+  @@index([date])
+}
+
+model CashTx {
+  id          String   @id @default(uuid())
+  txType      String
+  category    String
+  amount      Float
+  date        DateTime
+  description String   @default("")
+  paymentMode String   @default("handcash")
+  staffId     String
+  labourId    String?
+
+  staff    User             @relation("CashTxStaff", fields: [staffId], references: [id], onDelete: Restrict)
+  labour   Labour?          @relation(fields: [labourId], references: [id], onDelete: Restrict)
+  advances AdvanceRequest[]
+
+  @@index([date])
+  @@index([category])
+  @@index([staffId])
+}
+
+model AdvanceRequest {
+  id             String   @id @default(uuid())
+  labourId       String
+  amount         Float
+  date           DateTime
+  reason         String   @default("")
+  status         String   @default("pending")
+  deductedAmount Float    @default(0)
+  requestedBy    String
+  approvedBy     String?
+  expenseTxId    String?
+
+  labour    Labour  @relation(fields: [labourId], references: [id], onDelete: Restrict)
+  requester User    @relation("AdvanceRequester", fields: [requestedBy], references: [id], onDelete: Restrict)
+  approver  User?   @relation("AdvanceApprover", fields: [approvedBy], references: [id], onDelete: Restrict)
+  expenseTx CashTx? @relation(fields: [expenseTxId], references: [id], onDelete: SetNull)
+
+  @@index([date])
+  @@index([status])
+}
+
+model Reminder {
+  id             String    @id @default(uuid())
+  message        String
+  targetDate     DateTime
+  status         String    @default("pending")
+  type           String    @default("general")
+  targetStaffId  String?
+  createdBy      String
+  acknowledgedBy String?
+  acknowledgedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  targetStaff  User? @relation("ReminderTarget", fields: [targetStaffId], references: [id], onDelete: Restrict)
+  creator      User  @relation("ReminderCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  acknowledger User? @relation("ReminderAcknowledger", fields: [acknowledgedBy], references: [id], onDelete: Restrict)
+
+  @@index([targetDate])
+  @@index([status])
+}
+
+model Task {
+  id           String    @id @default(uuid())
+  title        String
+  taskType     String    @default("custom")
+  frequency    String    @default("one-time")
+  status       String    @default("pending")
+  assignedTo   String?
+  completedBy  String?
+  completedAt  DateTime?
+  description  String    @default("")
+  remarks      String    @default("")
+  nextFollowup String    @default("")
+  comments     Json      @default("[]")
+  seenByOwner  Boolean   @default(false)
+  seenAt       DateTime?
+  createdAt    DateTime  @default(now())
+
+  assignee  User? @relation("TaskAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
+  completer User? @relation("TaskCompleter", fields: [completedBy], references: [id], onDelete: Restrict)
+
+  @@index([status])
+  @@index([taskType])
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  sender    String
+  receiver  String
+  text      String   @default("")
+  mediaUrl  String   @default("")
+  mediaType String   @default("none")
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  senderUser   User @relation("MessageSender", fields: [sender], references: [id], onDelete: Restrict)
+  receiverUser User @relation("MessageReceiver", fields: [receiver], references: [id], onDelete: Restrict)
+
+  @@index([sender, receiver, createdAt])
+  @@index([receiver, isRead])
+}
+
+model Department {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
+model SystemSetting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     Json
+  updatedAt DateTime @default(now())
+}
