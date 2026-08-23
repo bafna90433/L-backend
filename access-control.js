@@ -21,6 +21,7 @@ const PERMISSION_GROUPS = [
     { key: 'advances.approve', label: 'Approve or reject advances' }
   ] },
   { group: 'Work', permissions: [
+    { key: 'work.dashboard.view', label: 'View work desk overview' },
     { key: 'reminders.view', label: 'View and acknowledge reminders' },
     { key: 'reminders.manage', label: 'Create and edit reminders' },
     { key: 'tasks.view', label: 'View tasks' },
@@ -38,7 +39,7 @@ const PERMISSION_GROUPS = [
 
 const DEFAULT_STAFF_PERMISSIONS = [
   'dashboard.view', 'labours.view', 'labours.manage', 'expenses.view', 'expenses.create', 'expenses.manage',
-  'advances.view', 'advances.create', 'reminders.view', 'tasks.view',
+  'advances.view', 'advances.create', 'work.dashboard.view', 'reminders.view', 'tasks.view',
   'tasks.manage', 'chat.use', 'staff.view'
 ];
 
@@ -97,11 +98,19 @@ const permissionMiddleware = permission => (req, res, next) => {
   next();
 };
 
+const anyPermissionMiddleware = permissions => (req, res, next) => {
+  if (!permissions.some(permission => hasPermission(req.user, permission))) {
+    return res.status(403).json({ message: `Access denied: one of ${permissions.join(', ')} permissions required` });
+  }
+  next();
+};
+
 module.exports = {
   PERMISSION_GROUPS,
   DEFAULT_ROLES,
   ensureDefaultRoles,
   resolveUserAccess,
   hasPermission,
-  permissionMiddleware
+  permissionMiddleware,
+  anyPermissionMiddleware
 };

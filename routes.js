@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const ImageKit = require('imagekit');
 const { User, Labour, Attendance, CashTx, AdvanceRequest, Reminder, Task, Message, Department, SystemSettings } = require('./models');
 const { prisma } = require('./postgres-models');
-const { PERMISSION_GROUPS, resolveUserAccess, permissionMiddleware } = require('./access-control');
+const { PERMISSION_GROUPS, resolveUserAccess, permissionMiddleware, anyPermissionMiddleware } = require('./access-control');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
 
@@ -1506,7 +1506,7 @@ function checkAndResetTask(task) {
 }
 
 // Task Routes
-router.get('/tasks', authMiddleware, permissionMiddleware('tasks.view'), async (req, res) => {
+router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'work.dashboard.view']), async (req, res) => {
   try {
     const tasks = await Task.find()
       .populate('assignedTo', 'name username')
