@@ -1579,7 +1579,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
   }
 });
 
-router.post('/tasks', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
+router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.create']), async (req, res) => {
   try {
     const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup } = req.body;
     if (!title) {
@@ -1616,7 +1616,7 @@ router.post('/tasks', authMiddleware, permissionMiddleware('tasks.manage'), asyn
   }
 });
 
-router.post('/tasks/:id/complete', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
+router.post('/tasks/:id/complete', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.edit']), async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
@@ -1677,7 +1677,7 @@ router.post('/tasks/:id/reset', authMiddleware, ownerOnlyMiddleware, async (req,
   }
 });
 
-router.post('/tasks/:id/comment', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
+router.post('/tasks/:id/comment', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.edit']), async (req, res) => {
   try {
     const { text } = req.body;
     if (!text) return res.status(400).json({ message: 'Comment text is required' });
@@ -1703,7 +1703,7 @@ router.post('/tasks/:id/comment', authMiddleware, permissionMiddleware('tasks.ma
   }
 });
 
-router.put('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
+router.put('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.edit']), async (req, res) => {
   try {
     const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup } = req.body;
     const task = await Task.findById(req.params.id);
@@ -1743,7 +1743,7 @@ router.put('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage'), a
   }
 });
 
-router.delete('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
+router.delete('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.delete']), async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
@@ -1761,6 +1761,7 @@ router.delete('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage')
     res.status(500).json({ message: error.message });
   }
 });
+
 
 
 // Message / Chat Routes

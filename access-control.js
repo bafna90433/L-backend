@@ -25,7 +25,9 @@ const PERMISSION_GROUPS = [
     { key: 'reminders.view', label: 'View and acknowledge reminders' },
     { key: 'reminders.manage', label: 'Create and edit reminders' },
     { key: 'tasks.view', label: 'View tasks' },
-    { key: 'tasks.manage', label: 'Create and update tasks' },
+    { key: 'tasks.create', label: 'Create new work / tasks' },
+    { key: 'tasks.edit', label: 'Edit staff work items' },
+    { key: 'tasks.delete', label: 'Delete staff work items' },
     { key: 'chat.use', label: 'Use team chat' }
   ] },
   { group: 'Management', permissions: [
@@ -40,8 +42,9 @@ const PERMISSION_GROUPS = [
 const DEFAULT_STAFF_PERMISSIONS = [
   'dashboard.view', 'labours.view', 'labours.manage', 'expenses.view', 'expenses.create', 'expenses.manage',
   'advances.view', 'advances.create', 'work.dashboard.view', 'reminders.view', 'tasks.view',
-  'tasks.manage', 'chat.use', 'staff.view'
+  'tasks.manage', 'tasks.create', 'tasks.edit', 'tasks.delete', 'chat.use', 'staff.view'
 ];
+
 
 const DEFAULT_ROLES = [
   { name: 'MD / Owner', slug: 'owner', description: 'Full system control', permissions: ['*'], isSystem: true },
