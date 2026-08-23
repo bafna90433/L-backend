@@ -109,6 +109,8 @@ const TaskSchema = new mongoose.Schema({
   frequency: { type: String, enum: ['daily', 'weekly', 'monthly', 'one-time'], default: 'one-time' },
   status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
   assignedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }, // Null means all staff
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  createdByRole: { type: String, enum: ['owner', 'staff'], default: 'staff' },
   completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   completedAt: { type: Date, default: null },
   description: { type: String, default: '' },
@@ -124,6 +126,7 @@ const TaskSchema = new mongoose.Schema({
   seenAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now }
 });
+
 
 const Task = mongoose.model('Task', TaskSchema);
 

@@ -1552,6 +1552,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
     const taskFilter = req.user.role === 'owner' ? {} : { assignedTo: req.user._id };
     const tasks = await Task.find(taskFilter)
       .populate('assignedTo', 'name username')
+      .populate('createdBy', 'name username role')
       .populate('completedBy', 'name username')
       .sort({ taskType: 1, createdAt: 1 });
     
@@ -1566,6 +1567,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
     if (updated) {
       const refreshedTasks = await Task.find(taskFilter)
         .populate('assignedTo', 'name username')
+        .populate('createdBy', 'name username role')
         .populate('completedBy', 'name username')
         .sort({ taskType: 1, createdAt: 1 });
       return res.json(refreshedTasks);
@@ -1595,6 +1597,8 @@ router.post('/tasks', authMiddleware, permissionMiddleware('tasks.manage'), asyn
       taskType: taskType || 'custom',
       frequency: frequency || 'one-time',
       assignedTo: finalAssignedTo || null,
+      createdBy: req.user._id,
+      createdByRole: req.user.role === 'owner' ? 'owner' : 'staff',
       description: description || '',
       remarks: remarks || '',
       nextFollowup: nextFollowup || '',
@@ -1602,7 +1606,11 @@ router.post('/tasks', authMiddleware, permissionMiddleware('tasks.manage'), asyn
       seenAt: req.user.role === 'owner' ? new Date() : null
     });
     await task.save();
-    res.status(201).json(task);
+
+    const populated = await Task.findById(task._id)
+      .populate('assignedTo', 'name username')
+      .populate('createdBy', 'name username role');
+    res.status(201).json(populated);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -1620,6 +1628,7 @@ router.post('/tasks/:id/complete', authMiddleware, permissionMiddleware('tasks.m
     
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
+      .populate('createdBy', 'name username role')
       .populate('completedBy', 'name username');
     res.json(populated);
   } catch (error) {
@@ -1640,6 +1649,7 @@ router.post('/tasks/:id/seen', authMiddleware, permissionMiddleware('tasks.view'
     
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
+      .populate('createdBy', 'name username role')
       .populate('completedBy', 'name username');
     res.json(populated);
   } catch (error) {
@@ -1659,6 +1669,7 @@ router.post('/tasks/:id/reset', authMiddleware, ownerOnlyMiddleware, async (req,
     
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
+      .populate('createdBy', 'name username role')
       .populate('completedBy', 'name username');
     res.json(populated);
   } catch (error) {
@@ -1684,6 +1695,7 @@ router.post('/tasks/:id/comment', authMiddleware, permissionMiddleware('tasks.ma
     
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
+      .populate('createdBy', 'name username role')
       .populate('completedBy', 'name username');
     res.json(populated);
   } catch (error) {
@@ -1698,10 +1710,14 @@ router.put('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage'), a
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
     const isOwner = req.user.role === 'owner';
-    const isAssignee = task.assignedTo && task.assignedTo.toString() === req.user._id.toString();
+    const isMDTask = task.createdByRole === 'owner' || task.taskType === 'reminder-sir';
 
-    // If owner or the staff member assigned to the task is editing
-    if (isOwner || isAssignee) {
+    // Staff cannot edit title/taskType/frequency of MD-assigned tasks
+    if (!isOwner && isMDTask && (title !== undefined || taskType !== undefined || frequency !== undefined)) {
+      return res.status(403).json({ message: 'Tasks assigned by MD cannot be edited by staff. Only remarks and follow-up notes can be updated.' });
+    }
+
+    if (isOwner || !isMDTask) {
       if (title !== undefined) task.title = title;
       if (taskType !== undefined) task.taskType = taskType;
       if (frequency !== undefined) task.frequency = frequency;
@@ -1719,6 +1735,7 @@ router.put('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage'), a
     
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
+      .populate('createdBy', 'name username role')
       .populate('completedBy', 'name username');
     res.json(populated);
   } catch (error) {
@@ -1726,15 +1743,25 @@ router.put('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage'), a
   }
 });
 
-router.delete('/tasks/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.delete('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
   try {
-    const task = await Task.findByIdAndDelete(req.params.id);
+    const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
+
+    const isOwner = req.user.role === 'owner';
+    const isMDTask = task.createdByRole === 'owner' || task.taskType === 'reminder-sir';
+
+    if (!isOwner && isMDTask) {
+      return res.status(403).json({ message: 'Tasks assigned by MD cannot be deleted by staff' });
+    }
+
+    await Task.findByIdAndDelete(req.params.id);
     res.json({ message: 'Task deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
+
 
 // Message / Chat Routes
 const chatUserSelect = { id: true, name: true, username: true, role: true, imageUrl: true };
