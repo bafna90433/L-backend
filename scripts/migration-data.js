@@ -172,7 +172,16 @@ const canonicalize = (value) => {
 
 function compareDatasets(expectedRows, actualRows) {
   const expected = new Map(expectedRows.map(row => [row.id, JSON.stringify(canonicalize(row))]));
-  const actual = new Map(actualRows.map(row => [row.id, JSON.stringify(canonicalize(row))]));
+  // PostgreSQL may gain additive columns after the migration. Compare every
+  // migrated field while ignoring only fields that never existed in MongoDB.
+  const expectedById = new Map(expectedRows.map(row => [row.id, row]));
+  const actual = new Map(actualRows.map(row => {
+    const expectedRow = expectedById.get(row.id);
+    const projected = expectedRow
+      ? Object.fromEntries(Object.keys(expectedRow).map(key => [key, row[key]]))
+      : row;
+    return [row.id, JSON.stringify(canonicalize(projected))];
+  }));
   const missingIds = [...expected.keys()].filter(id => !actual.has(id));
   const extraIds = [...actual.keys()].filter(id => !expected.has(id));
   const changedIds = [...expected.keys()].filter(id => actual.has(id) && expected.get(id) !== actual.get(id));

@@ -8,14 +8,20 @@ datasource db {
 }
 
 model User {
-  id       String @id @default(uuid())
-  username String @unique
-  password String
-  name     String
-  role     String
-  whatsapp String @default("")
-  imageUrl String @default("")
-  upiId    String @default("")
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  name      String
+  role      String
+  whatsapp  String   @default("")
+  imageUrl  String   @default("")
+  upiId     String   @default("")
+  roleId    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roleRef Role? @relation(fields: [roleId], references: [id], onDelete: Restrict)
 
   cashTransactions      CashTx[]         @relation("CashTxStaff")
   requestedAdvances     AdvanceRequest[] @relation("AdvanceRequester")
@@ -27,6 +33,23 @@ model User {
   completedTasks        Task[]           @relation("TaskCompleter")
   sentMessages          Message[]        @relation("MessageSender")
   receivedMessages      Message[]        @relation("MessageReceiver")
+
+  @@index([roleId])
+  @@index([isActive])
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  description String   @default("")
+  permissions String[] @default([])
+  isSystem    Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users User[]
 }
 
 model Labour {

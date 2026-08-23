@@ -51,3 +51,9 @@ test('compares full record contents, not only ids', () => {
   assert.equal(compareDatasets(expected, same).matches, true);
   assert.deepEqual(compareDatasets(expected, changed).changedIds, ['1']);
 });
+
+test('allows additive PostgreSQL columns without weakening migrated-field checks', () => {
+  const expected = [{ id: '1', name: 'Original' }];
+  const actual = [{ id: '1', name: 'Original', isActive: true, roleId: 'role-1' }];
+  assert.equal(compareDatasets(expected, actual).matches, true);
+});

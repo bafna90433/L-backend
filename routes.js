@@ -4,6 +4,8 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const ImageKit = require('imagekit');
 const { User, Labour, Attendance, CashTx, AdvanceRequest, Reminder, Task, Message, Department, SystemSettings } = require('./models');
+const { prisma } = require('./postgres-models');
+const { PERMISSION_GROUPS, resolveUserAccess, permissionMiddleware } = require('./access-control');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
 
@@ -93,6 +95,14 @@ const authMiddleware = async (req, res, next) => {
     if (!user) {
       return res.status(401).json({ message: 'User not found or token invalid' });
     }
+    const access = await resolveUserAccess(user);
+    if (!access.isActive) {
+      return res.status(403).json({ message: 'Your account or assigned role is inactive. Contact the MD.' });
+    }
+    user.permissions = access.permissions;
+    user.roleName = access.roleName;
+    user.roleId = access.roleId;
+    user.isActive = access.isActive;
     req.user = user;
     next();
   } catch (error) {
@@ -145,6 +155,10 @@ router.post('/auth/login', async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
+    const access = await resolveUserAccess(user);
+    if (!access.isActive) {
+      return res.status(403).json({ message: 'Your account or assigned role is inactive. Contact the MD.' });
+    }
     const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
     res.json({
       token,
@@ -155,7 +169,11 @@ router.post('/auth/login', async (req, res) => {
         role: user.role,
         whatsapp: user.whatsapp || '',
         imageUrl: user.imageUrl || '',
-        upiId: user.upiId || ''
+        upiId: user.upiId || '',
+        roleId: access.roleId,
+        roleName: access.roleName,
+        permissions: access.permissions,
+        isActive: access.isActive
       }
     });
   } catch (error) {
@@ -165,7 +183,15 @@ router.post('/auth/login', async (req, res) => {
 });
 
 router.get('/auth/me', authMiddleware, async (req, res) => {
-  res.json({ user: req.user });
+  res.json({
+    user: {
+      ...req.user.toJSON(),
+      roleId: req.user.roleId || null,
+      roleName: req.user.roleName || req.user.role,
+      permissions: req.user.permissions || [],
+      isActive: req.user.isActive !== false
+    }
+  });
 });
 
 router.put('/auth/profile', authMiddleware, async (req, res) => {
@@ -197,9 +223,9 @@ router.put('/auth/profile', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/staff', authMiddleware, async (req, res) => {
+router.get('/staff', authMiddleware, permissionMiddleware('staff.view'), async (req, res) => {
   try {
-    const staffList = await User.find({ role: { $in: ['staff', 'staff2'] } }).select('name username _id role whatsapp imageUrl');
+    const staffList = await User.find({ role: { $ne: 'owner' }, isActive: { $ne: false } }).select('name username _id role roleId roleName permissions whatsapp imageUrl isActive');
     res.json(staffList);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -216,13 +242,165 @@ router.put('/staff/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) =
     if (!staffUser) {
       return res.status(404).json({ message: 'Staff user not found' });
     }
-    if (staffUser.role !== 'staff' && staffUser.role !== 'staff2') {
+    if (staffUser.role === 'owner') {
       return res.status(400).json({ message: 'Only staff names can be updated' });
     }
     staffUser.name = name;
     await staffUser.save();
     res.json({ message: 'Staff name updated successfully', user: staffUser });
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+const normalizeRoleSlug = value => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '');
+
+const publicStaff = staff => ({
+  id: staff.id,
+  _id: staff.id,
+  username: staff.username,
+  name: staff.name,
+  role: staff.role,
+  roleId: staff.roleId,
+  roleName: staff.roleRef?.name || staff.role,
+  permissions: staff.roleRef?.permissions || [],
+  whatsapp: staff.whatsapp || '',
+  imageUrl: staff.imageUrl || '',
+  upiId: staff.upiId || '',
+  isActive: staff.isActive,
+  createdAt: staff.createdAt
+});
+
+// MD-only dynamic role and staff management. Records are deactivated, never deleted.
+router.get('/admin/access/permissions', authMiddleware, ownerOnlyMiddleware, (req, res) => {
+  res.json({ groups: PERMISSION_GROUPS });
+});
+
+router.get('/admin/roles', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const roles = await prisma.role.findMany({
+      orderBy: [{ isSystem: 'desc' }, { name: 'asc' }],
+      include: { _count: { select: { users: true } } }
+    });
+    res.json(roles.map(role => ({ ...role, userCount: role._count.users, _count: undefined })));
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/admin/roles', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const slug = normalizeRoleSlug(req.body.slug || name);
+    const description = String(req.body.description || '').trim();
+    const validPermissions = new Set(PERMISSION_GROUPS.flatMap(group => group.permissions.map(item => item.key)));
+    const permissions = [...new Set(Array.isArray(req.body.permissions) ? req.body.permissions : [])]
+      .filter(permission => validPermissions.has(permission));
+    if (!name || !slug) return res.status(400).json({ message: 'Role name is required' });
+    if (['owner', 'staff', 'staff2'].includes(slug)) return res.status(400).json({ message: 'This system role slug is reserved' });
+    const role = await prisma.role.create({
+      data: { name, slug, description, permissions, isActive: req.body.isActive !== false }
+    });
+    res.status(201).json({ ...role, userCount: 0 });
+  } catch (error) {
+    if (error.code === 'P2002') return res.status(400).json({ message: 'A role with this slug already exists' });
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.put('/admin/roles/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const existing = await prisma.role.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ message: 'Role not found' });
+    if (existing.slug === 'owner') return res.status(400).json({ message: 'MD / Owner role is protected' });
+    const validPermissions = new Set(PERMISSION_GROUPS.flatMap(group => group.permissions.map(item => item.key)));
+    const data = {};
+    if (req.body.name !== undefined) data.name = String(req.body.name).trim();
+    if (req.body.description !== undefined) data.description = String(req.body.description).trim();
+    if (req.body.permissions !== undefined) {
+      if (!Array.isArray(req.body.permissions)) return res.status(400).json({ message: 'Permissions must be a list' });
+      data.permissions = [...new Set(req.body.permissions)].filter(permission => validPermissions.has(permission));
+    }
+    if (req.body.isActive !== undefined) data.isActive = Boolean(req.body.isActive);
+    if (!data.name && req.body.name !== undefined) return res.status(400).json({ message: 'Role name is required' });
+    const role = await prisma.role.update({ where: { id: existing.id }, data });
+    const userCount = await prisma.user.count({ where: { roleId: existing.id } });
+    res.json({ ...role, userCount });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/admin/staff', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const staff = await prisma.user.findMany({
+      where: { role: { not: 'owner' } },
+      include: { roleRef: true },
+      orderBy: [{ isActive: 'desc' }, { name: 'asc' }]
+    });
+    res.json(staff.map(publicStaff));
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/admin/staff', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const name = String(req.body.name || '').trim();
+    const username = String(req.body.username || '').trim().toLowerCase();
+    const password = String(req.body.password || '');
+    if (!name || !username || password.length < 6 || !req.body.roleId) {
+      return res.status(400).json({ message: 'Name, username, role and minimum 6-character password are required' });
+    }
+    const role = await prisma.role.findUnique({ where: { id: req.body.roleId } });
+    if (!role || role.slug === 'owner' || !role.isActive) return res.status(400).json({ message: 'Select an active staff role' });
+    const staff = await prisma.user.create({
+      data: {
+        name,
+        username,
+        password: await bcrypt.hash(password, 10),
+        whatsapp: String(req.body.whatsapp || '').trim(),
+        role: role.slug,
+        roleId: role.id,
+        isActive: req.body.isActive !== false
+      },
+      include: { roleRef: true }
+    });
+    res.status(201).json(publicStaff(staff));
+  } catch (error) {
+    if (error.code === 'P2002') return res.status(400).json({ message: 'Username already exists' });
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.put('/admin/staff/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!existing || existing.role === 'owner') return res.status(404).json({ message: 'Staff user not found' });
+    const data = {};
+    if (req.body.name !== undefined) data.name = String(req.body.name).trim();
+    if (req.body.username !== undefined) data.username = String(req.body.username).trim().toLowerCase();
+    if (req.body.whatsapp !== undefined) data.whatsapp = String(req.body.whatsapp).trim();
+    if (req.body.isActive !== undefined) data.isActive = Boolean(req.body.isActive);
+    if (req.body.password) {
+      if (String(req.body.password).length < 6) return res.status(400).json({ message: 'Password must be at least 6 characters' });
+      data.password = await bcrypt.hash(String(req.body.password), 10);
+    }
+    if (req.body.roleId !== undefined) {
+      const role = await prisma.role.findUnique({ where: { id: req.body.roleId } });
+      if (!role || role.slug === 'owner' || !role.isActive) return res.status(400).json({ message: 'Select an active staff role' });
+      data.roleId = role.id;
+      data.role = role.slug;
+    }
+    if (!data.name && req.body.name !== undefined) return res.status(400).json({ message: 'Staff name is required' });
+    const staff = await prisma.user.update({ where: { id: existing.id }, data, include: { roleRef: true } });
+    res.json(publicStaff(staff));
+  } catch (error) {
+    if (error.code === 'P2002') return res.status(400).json({ message: 'Username already exists' });
     res.status(500).json({ message: error.message });
   }
 });
@@ -249,7 +427,7 @@ router.get('/imagekit/auth', authMiddleware, (req, res) => {
 });
 
 // Labour Routes
-router.get('/labours', authMiddleware, async (req, res) => {
+router.get('/labours', authMiddleware, permissionMiddleware('labours.view'), async (req, res) => {
   try {
     const labours = await Labour.find().sort({ name: 1 });
     res.json(labours);
@@ -258,7 +436,7 @@ router.get('/labours', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/labours', authMiddleware, async (req, res) => {
+router.post('/labours', authMiddleware, permissionMiddleware('labours.manage'), async (req, res) => {
   try {
     const { name, whatsapp, monthlySalary, shiftStart, shiftEnd, gender, imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     if (!name || !whatsapp || monthlySalary === undefined) {
@@ -290,7 +468,7 @@ router.post('/labours', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/labours/:id', authMiddleware, async (req, res) => {
+router.put('/labours/:id', authMiddleware, permissionMiddleware('labours.manage'), async (req, res) => {
   try {
     const { name, whatsapp, monthlySalary, shiftStart, shiftEnd, gender, imageUrl, status, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     const labour = await Labour.findById(req.params.id);
@@ -333,7 +511,7 @@ router.put('/labours/:id', authMiddleware, async (req, res) => {
   }
 });
 
-router.delete('/labours/:id', authMiddleware, async (req, res) => {
+router.delete('/labours/:id', authMiddleware, permissionMiddleware('labours.manage'), async (req, res) => {
   try {
     const labour = await Labour.findByIdAndDelete(req.params.id);
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
@@ -344,7 +522,7 @@ router.delete('/labours/:id', authMiddleware, async (req, res) => {
 });
 
 // Attendance Routes
-router.get('/attendance', authMiddleware, async (req, res) => {
+router.get('/attendance', authMiddleware, permissionMiddleware('attendance.view'), async (req, res) => {
   try {
     const { labourId, month, year, startDate, endDate } = req.query;
     let query = {};
@@ -404,7 +582,7 @@ router.post('/attendance/bulk', authMiddleware, ownerOnlyMiddleware, async (req,
 });
 
 // Register Face Embedding for a Labourer
-router.put('/labours/:id/face', authMiddleware, async (req, res) => {
+router.put('/labours/:id/face', authMiddleware, permissionMiddleware('labours.manage'), async (req, res) => {
   try {
     const { faceEmbedding } = req.body;
     if (!faceEmbedding || !Array.isArray(faceEmbedding) || faceEmbedding.length === 0) {
@@ -424,7 +602,7 @@ router.put('/labours/:id/face', authMiddleware, async (req, res) => {
 });
 
 // Mark Attendance for a single Labourer (Kiosk Mode)
-router.post('/attendance/mark', authMiddleware, async (req, res) => {
+router.post('/attendance/mark', authMiddleware, permissionMiddleware('attendance.manage'), async (req, res) => {
   try {
     const { labourId, status } = req.body;
     if (!labourId) {
@@ -587,7 +765,7 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
 });
 
 // Approve or Reject Permission for an attendance entry
-router.post('/attendance/:id/permission', authMiddleware, async (req, res) => {
+router.post('/attendance/:id/permission', authMiddleware, permissionMiddleware('attendance.manage'), async (req, res) => {
   try {
     const { isApproved } = req.body;
     if (isApproved === undefined) {
@@ -637,7 +815,7 @@ router.post('/attendance/:id/permission', authMiddleware, async (req, res) => {
 });
 
 // Expense / Cash Book Routes
-router.get('/expenses', authMiddleware, async (req, res) => {
+router.get('/expenses', authMiddleware, permissionMiddleware('expenses.view'), async (req, res) => {
   try {
     const { startDate, endDate, category, txType } = req.query;
     let query = {};
@@ -662,7 +840,7 @@ router.get('/expenses', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/expenses/balance', authMiddleware, async (req, res) => {
+router.get('/expenses/balance', authMiddleware, permissionMiddleware('expenses.view'), async (req, res) => {
   try {
     const txs = await CashTx.find();
     
@@ -722,7 +900,7 @@ router.get('/expenses/balance', authMiddleware, async (req, res) => {
 });
 
 // Owner gives cash to office staff (received transaction)
-router.post('/expenses/cash-received', authMiddleware, async (req, res) => {
+router.post('/expenses/cash-received', authMiddleware, permissionMiddleware('expenses.create'), async (req, res) => {
   try {
     const { amount, date, description, staffId, paymentMode } = req.body;
     
@@ -737,9 +915,9 @@ router.post('/expenses/cash-received', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'Amount, date, and staffId are required' });
     }
 
-    // Verify staffId exists and is staff or staff2
+    // Any active non-owner role can be selected as staff.
     const staffUser = await User.findById(targetStaffId);
-    if (!staffUser || (staffUser.role !== 'staff' && staffUser.role !== 'staff2')) {
+    if (!staffUser || staffUser.role === 'owner' || staffUser.isActive === false) {
       return res.status(400).json({ message: 'Valid staff member must be selected to receive the cash' });
     }
 
@@ -761,7 +939,7 @@ router.post('/expenses/cash-received', authMiddleware, async (req, res) => {
 });
 
 // Staff (or Owner) logs an expense
-router.post('/expenses/log', authMiddleware, async (req, res) => {
+router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.create'), async (req, res) => {
   try {
     const { amount, date, category, description, labourId, advanceDeducted, newAdvanceGiven, paymentMode } = req.body;
     if (!amount || !date || !category) {
@@ -833,7 +1011,7 @@ router.post('/expenses/log', authMiddleware, async (req, res) => {
 });
 
 // Edit a cash transaction (CashTx)
-router.put('/expenses/:id', authMiddleware, async (req, res) => {
+router.put('/expenses/:id', authMiddleware, permissionMiddleware('expenses.manage'), async (req, res) => {
   try {
     const { amount, date, category, description, paymentMode } = req.body;
     
@@ -872,7 +1050,7 @@ router.put('/expenses/:id', authMiddleware, async (req, res) => {
 });
 
 // Delete a cash transaction (CashTx)
-router.delete('/expenses/:id', authMiddleware, async (req, res) => {
+router.delete('/expenses/:id', authMiddleware, permissionMiddleware('expenses.manage'), async (req, res) => {
   try {
     // Staff can only delete their own logs unless they are the owner
     let query = { _id: req.params.id };
@@ -893,7 +1071,7 @@ router.delete('/expenses/:id', authMiddleware, async (req, res) => {
 });
 
 // Advance Requests Routes
-router.post('/advances/request', authMiddleware, async (req, res) => {
+router.post('/advances/request', authMiddleware, permissionMiddleware('advances.create'), async (req, res) => {
   try {
     const { labourId, amount, date, reason } = req.body;
     if (!labourId || !amount || !date) {
@@ -1016,7 +1194,7 @@ router.post('/advances/direct', authMiddleware, ownerOnlyMiddleware, async (req,
   }
 });
 
-router.get('/advances', authMiddleware, async (req, res) => {
+router.get('/advances', authMiddleware, permissionMiddleware('advances.view'), async (req, res) => {
   try {
     const { status, labourId } = req.query;
     let query = {};
@@ -1110,7 +1288,7 @@ router.post('/automation/whatsapp', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/reminders', authMiddleware, async (req, res) => {
+router.get('/reminders', authMiddleware, permissionMiddleware('reminders.view'), async (req, res) => {
   try {
     let query = {};
     if (req.user.role === 'owner') {
@@ -1139,7 +1317,7 @@ router.get('/reminders', authMiddleware, async (req, res) => {
 });
 
 // Self Reminder Route (For staff)
-router.post('/reminders/self', authMiddleware, async (req, res) => {
+router.post('/reminders/self', authMiddleware, permissionMiddleware('reminders.view'), async (req, res) => {
   try {
     const { message, targetDate } = req.body;
     if (!message || !targetDate) {
@@ -1161,7 +1339,7 @@ router.post('/reminders/self', authMiddleware, async (req, res) => {
   }
 });
 
-router.delete('/reminders/self/:id', authMiddleware, async (req, res) => {
+router.delete('/reminders/self/:id', authMiddleware, permissionMiddleware('reminders.view'), async (req, res) => {
   try {
     const reminder = await Reminder.findOne({ _id: req.params.id, createdBy: req.user._id, type: 'self' });
     if (!reminder) return res.status(404).json({ message: 'Reminder not found or unauthorized' });
@@ -1172,7 +1350,7 @@ router.delete('/reminders/self/:id', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/reminders/self/:id', authMiddleware, async (req, res) => {
+router.put('/reminders/self/:id', authMiddleware, permissionMiddleware('reminders.view'), async (req, res) => {
   try {
     const { message, targetDate } = req.body;
     if (!message && !targetDate) {
@@ -1213,7 +1391,7 @@ router.post('/reminders', authMiddleware, ownerOnlyMiddleware, async (req, res) 
   }
 });
 
-router.post('/reminders/:id/acknowledge', authMiddleware, async (req, res) => {
+router.post('/reminders/:id/acknowledge', authMiddleware, permissionMiddleware('reminders.view'), async (req, res) => {
   try {
     const reminder = await Reminder.findById(req.params.id);
     if (!reminder) return res.status(404).json({ message: 'Reminder not found' });
@@ -1236,7 +1414,7 @@ router.post('/reminders/:id/acknowledge', authMiddleware, async (req, res) => {
 });
 
 // Staff can update the targetDate of an acknowledged reminder (reschedule alarm)
-router.post('/reminders/:id/update-date', authMiddleware, async (req, res) => {
+router.post('/reminders/:id/update-date', authMiddleware, permissionMiddleware('reminders.view'), async (req, res) => {
   try {
     const reminder = await Reminder.findById(req.params.id);
     if (!reminder) return res.status(404).json({ message: 'Reminder not found' });
@@ -1328,7 +1506,7 @@ function checkAndResetTask(task) {
 }
 
 // Task Routes
-router.get('/tasks', authMiddleware, async (req, res) => {
+router.get('/tasks', authMiddleware, permissionMiddleware('tasks.view'), async (req, res) => {
   try {
     const tasks = await Task.find()
       .populate('assignedTo', 'name username')
@@ -1357,7 +1535,7 @@ router.get('/tasks', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/tasks', authMiddleware, async (req, res) => {
+router.post('/tasks', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
   try {
     const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup } = req.body;
     if (!title) {
@@ -1388,7 +1566,7 @@ router.post('/tasks', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/tasks/:id/complete', authMiddleware, async (req, res) => {
+router.post('/tasks/:id/complete', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
@@ -1407,7 +1585,7 @@ router.post('/tasks/:id/complete', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/tasks/:id/seen', authMiddleware, async (req, res) => {
+router.post('/tasks/:id/seen', authMiddleware, permissionMiddleware('tasks.view'), async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
@@ -1446,7 +1624,7 @@ router.post('/tasks/:id/reset', authMiddleware, ownerOnlyMiddleware, async (req,
   }
 });
 
-router.post('/tasks/:id/comment', authMiddleware, async (req, res) => {
+router.post('/tasks/:id/comment', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
   try {
     const { text } = req.body;
     if (!text) return res.status(400).json({ message: 'Comment text is required' });
@@ -1471,7 +1649,7 @@ router.post('/tasks/:id/comment', authMiddleware, async (req, res) => {
   }
 });
 
-router.put('/tasks/:id', authMiddleware, async (req, res) => {
+router.put('/tasks/:id', authMiddleware, permissionMiddleware('tasks.manage'), async (req, res) => {
   try {
     const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup } = req.body;
     const task = await Task.findById(req.params.id);
@@ -1517,7 +1695,7 @@ router.delete('/tasks/:id', authMiddleware, ownerOnlyMiddleware, async (req, res
 });
 
 // Message / Chat Routes
-router.get('/messages/unread/count', authMiddleware, async (req, res) => {
+router.get('/messages/unread/count', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
     const unreadCounts = await Message.aggregate([
       { $match: { receiver: req.user._id, isRead: false } },
@@ -1533,7 +1711,7 @@ router.get('/messages/unread/count', authMiddleware, async (req, res) => {
   }
 });
 
-router.get('/messages/:userId', authMiddleware, async (req, res) => {
+router.get('/messages/:userId', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
     const targetUserId = req.params.userId;
     const messages = await Message.find({
@@ -1555,7 +1733,7 @@ router.get('/messages/:userId', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/messages', authMiddleware, async (req, res) => {
+router.post('/messages', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
     const { receiverId, text, mediaUrl, mediaType } = req.body;
     if (!receiverId) {
@@ -1577,7 +1755,7 @@ router.post('/messages', authMiddleware, async (req, res) => {
   }
 });
 
-router.delete('/messages/:userId', authMiddleware, async (req, res) => {
+router.delete('/messages/:userId', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
     const targetId = req.params.userId;
     const currentUserId = req.user._id;

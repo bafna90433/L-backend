@@ -6,7 +6,7 @@ if (process.env.NODE_ENV !== 'production') global.__labourPrisma = prisma;
 const specs = {
   User: {
     delegate: 'user',
-    fields: ['username', 'password', 'name', 'role', 'whatsapp', 'imageUrl', 'upiId']
+    fields: ['username', 'password', 'name', 'role', 'whatsapp', 'imageUrl', 'upiId', 'roleId', 'isActive', 'createdAt', 'updatedAt']
   },
   Labour: {
     delegate: 'labour',

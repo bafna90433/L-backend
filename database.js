@@ -8,6 +8,8 @@ async function connectDatabase() {
     const { prisma } = require('./postgres-models');
     await prisma.$connect();
     await prisma.$queryRaw`SELECT 1`;
+    const { ensureDefaultRoles } = require('./access-control');
+    await ensureDefaultRoles();
     return { provider: 'postgresql' };
   }
 
