@@ -3,7 +3,8 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const ImageKit = require('imagekit');
-const { User, Labour, Attendance, CashTx, AdvanceRequest, Reminder, Task, Message, Department, SystemSettings } = require('./models');
+const { User, Labour, Attendance, CashTx, AdvanceRequest, Reminder, Task, Message, Department, SystemSettings, DeletedLog } = require('./models');
+
 const { prisma } = require('./postgres-models');
 const { PERMISSION_GROUPS, resolveUserAccess, permissionMiddleware, anyPermissionMiddleware } = require('./access-control');
 
@@ -941,7 +942,7 @@ router.post('/expenses/cash-received', authMiddleware, permissionMiddleware('exp
 // Staff (or Owner) logs an expense
 router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.create'), async (req, res) => {
   try {
-    const { amount, date, category, description, labourId, advanceDeducted, newAdvanceGiven, paymentMode } = req.body;
+    const { amount, date, category, description, labourId, advanceDeducted, newAdvanceGiven, paymentMode, staffId } = req.body;
     if (!amount || !date || !category) {
       return res.status(400).json({ message: 'Amount, date, and category are required' });
     }
@@ -950,6 +951,8 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
       return res.status(400).json({ message: 'Invalid category for expense' });
     }
 
+    const targetStaffId = staffId || req.user._id;
+
     const tx = new CashTx({
       txType: 'expense',
       category,
@@ -957,11 +960,12 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
       date: new Date(date),
       description: description || '',
       paymentMode: paymentMode || 'handcash',
-      staffId: req.user._id,
+      staffId: targetStaffId,
       labourId: labourId || null
     });
 
     await tx.save();
+
 
     // If it's a salary payment and advance is deducted, update the AdvanceRequests
     if (category === 'salary-payment' && labourId && advanceDeducted && parseFloat(advanceDeducted) > 0) {
@@ -1058,9 +1062,33 @@ router.delete('/expenses/:id', authMiddleware, permissionMiddleware('expenses.ma
       query.staffId = req.user._id;
     }
 
-    const tx = await CashTx.findOne(query);
+    const tx = await CashTx.findOne(query)
+      .populate('staffId', 'name username')
+      .populate('labourId', 'name');
     if (!tx) {
       return res.status(404).json({ message: 'Transaction not found or unauthorized' });
+    }
+
+    // Save to DeletedLog audit
+    try {
+      const deletedRecord = new DeletedLog({
+        originalId: tx._id ? tx._id.toString() : '',
+        itemType: 'Cash Transaction',
+        category: tx.category || 'general',
+        txType: tx.txType || 'expense',
+        amount: tx.amount || 0,
+        paymentMode: tx.paymentMode || 'handcash',
+        date: tx.date || new Date(),
+        description: tx.description || '',
+        taggedPerson: tx.labourId?.name || '',
+        loggedByStaff: tx.staffId?.name || '',
+        deletedBy: req.user._id,
+        deletedByName: req.user.name || req.user.username || 'Staff',
+        deletedAt: new Date()
+      });
+      await deletedRecord.save();
+    } catch (auditErr) {
+      console.error('Failed to write deleted log audit:', auditErr);
     }
 
     await CashTx.deleteOne({ _id: req.params.id });
@@ -1069,6 +1097,19 @@ router.delete('/expenses/:id', authMiddleware, permissionMiddleware('expenses.ma
     res.status(500).json({ message: error.message });
   }
 });
+
+// Fetch all deleted logs for audit
+router.get('/deleted-logs', authMiddleware, permissionMiddleware('expenses.view'), async (req, res) => {
+  try {
+    const logs = await DeletedLog.find()
+      .populate('deletedBy', 'name username role')
+      .sort({ deletedAt: -1, _id: -1 });
+    res.json(logs);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 
 // Advance Requests Routes
 router.post('/advances/request', authMiddleware, permissionMiddleware('advances.create'), async (req, res) => {

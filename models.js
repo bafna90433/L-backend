@@ -155,7 +155,25 @@ const SystemSettingsSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: Date.now }
 });
 
+// Deleted Logs Audit Schema
+const DeletedLogSchema = new mongoose.Schema({
+  originalId: { type: String, default: '' },
+  itemType: { type: String, default: 'Cash Transaction' },
+  category: { type: String, default: '' },
+  txType: { type: String, default: 'expense' },
+  amount: { type: Number, default: 0 },
+  paymentMode: { type: String, default: 'handcash' },
+  date: { type: Date, default: null },
+  description: { type: String, default: '' },
+  taggedPerson: { type: String, default: '' },
+  loggedByStaff: { type: String, default: '' },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  deletedByName: { type: String, default: '' },
+  deletedAt: { type: Date, default: Date.now }
+});
+
 const SystemSettings = mongoose.model('SystemSettings', SystemSettingsSchema);
+const DeletedLog = mongoose.model('DeletedLog', DeletedLogSchema);
 
 module.exports = {
   User,
@@ -167,7 +185,9 @@ module.exports = {
   Task,
   Message,
   Department,
-  SystemSettings
+  SystemSettings,
+  DeletedLog
 };
 }
+
 
