@@ -1696,6 +1696,141 @@ router.delete('/tasks/:id', authMiddleware, ownerOnlyMiddleware, async (req, res
 });
 
 // Message / Chat Routes
+const chatUserSelect = { id: true, name: true, username: true, role: true, imageUrl: true };
+
+router.get('/chat/users', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      where: { isActive: true },
+      select: chatUserSelect,
+      orderBy: { name: 'asc' }
+    });
+    res.json(users.filter(user => user.id !== req.user._id.toString()));
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/chat/groups', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const userId = req.user._id.toString();
+    const groups = await prisma.chatGroup.findMany({
+      where: { members: { some: { userId } } },
+      include: {
+        members: { include: { user: { select: chatUserSelect } }, orderBy: { joinedAt: 'asc' } },
+        messages: {
+          take: 1,
+          orderBy: { createdAt: 'desc' },
+          include: { senderUser: { select: chatUserSelect } }
+        }
+      },
+      orderBy: { updatedAt: 'desc' }
+    });
+
+    const result = await Promise.all(groups.map(async group => {
+      const membership = group.members.find(member => member.userId === userId);
+      const unreadCount = await prisma.groupMessage.count({
+        where: {
+          groupId: group.id,
+          sender: { not: userId },
+          ...(membership?.lastReadAt ? { createdAt: { gt: membership.lastReadAt } } : {})
+        }
+      });
+      return { ...group, lastMessage: group.messages[0] || null, messages: undefined, unreadCount };
+    }));
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/chat/groups', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const userId = req.user._id.toString();
+    const name = String(req.body.name || '').trim();
+    const requestedMembers = Array.isArray(req.body.memberIds) ? req.body.memberIds.map(String) : [];
+    if (name.length < 2) return res.status(400).json({ message: 'Group name must be at least 2 characters' });
+
+    const memberIds = [...new Set([userId, ...requestedMembers])];
+    const activeUsers = await prisma.user.findMany({ where: { id: { in: memberIds }, isActive: true }, select: { id: true } });
+    const activeIds = activeUsers.map(user => user.id);
+    if (!activeIds.includes(userId) || activeIds.length < 2) {
+      return res.status(400).json({ message: 'Select at least one active group member' });
+    }
+
+    const group = await prisma.chatGroup.create({
+      data: {
+        name,
+        description: String(req.body.description || '').trim(),
+        avatarUrl: String(req.body.avatarUrl || ''),
+        createdBy: userId,
+        members: { create: activeIds.map(id => ({ userId: id, isAdmin: id === userId, lastReadAt: new Date() })) }
+      },
+      include: { members: { include: { user: { select: chatUserSelect } } } }
+    });
+    res.status(201).json({ ...group, unreadCount: 0, lastMessage: null });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.get('/chat/groups/:groupId/messages', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const userId = req.user._id.toString();
+    const membership = await prisma.chatGroupMember.findUnique({
+      where: { groupId_userId: { groupId: req.params.groupId, userId } }
+    });
+    if (!membership) return res.status(403).json({ message: 'You are not a member of this group' });
+
+    const messages = await prisma.groupMessage.findMany({
+      where: { groupId: req.params.groupId },
+      include: { senderUser: { select: chatUserSelect } },
+      orderBy: { createdAt: 'desc' },
+      take: 200
+    });
+    await prisma.chatGroupMember.update({ where: { id: membership.id }, data: { lastReadAt: new Date() } });
+    res.json(messages.reverse());
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/chat/groups/:groupId/messages', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const userId = req.user._id.toString();
+    const membership = await prisma.chatGroupMember.findUnique({
+      where: { groupId_userId: { groupId: req.params.groupId, userId } },
+      include: { group: { include: { members: { select: { userId: true } } } } }
+    });
+    if (!membership) return res.status(403).json({ message: 'You are not a member of this group' });
+
+    const text = String(req.body.text || '').trim();
+    const mediaUrl = String(req.body.mediaUrl || '');
+    if (!text && !mediaUrl) return res.status(400).json({ message: 'Message or attachment is required' });
+    const memberIds = new Set(membership.group.members.map(member => member.userId));
+    const mentions = (Array.isArray(req.body.mentions) ? req.body.mentions.map(String) : []).filter(id => memberIds.has(id));
+
+    const message = await prisma.groupMessage.create({
+      data: {
+        groupId: req.params.groupId,
+        sender: userId,
+        text,
+        mediaUrl,
+        mediaType: String(req.body.mediaType || 'none'),
+        mentions: [...new Set(mentions)]
+      },
+      include: { senderUser: { select: chatUserSelect } }
+    });
+    await prisma.$transaction([
+      prisma.chatGroup.update({ where: { id: req.params.groupId }, data: { updatedAt: new Date() } }),
+      prisma.chatGroupMember.update({ where: { id: membership.id }, data: { lastReadAt: new Date() } })
+    ]);
+    res.status(201).json(message);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 router.get('/messages/unread/count', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
     const unreadCounts = await Message.aggregate([
