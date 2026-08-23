@@ -1843,6 +1843,129 @@ router.post('/chat/groups', authMiddleware, permissionMiddleware('chat.use'), as
   }
 });
 
+// Add member(s) to chat group
+router.post('/chat/groups/:groupId/members', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const currentUserId = req.user._id.toString();
+    const { groupId } = req.params;
+    const memberIdsToAdd = Array.isArray(req.body.memberIds)
+      ? req.body.memberIds.map(String)
+      : (req.body.userId ? [String(req.body.userId)] : []);
+
+    if (memberIdsToAdd.length === 0) {
+      return res.status(400).json({ message: 'Select at least one member to add' });
+    }
+
+    const group = await prisma.chatGroup.findUnique({
+      where: { id: groupId },
+      include: { members: true }
+    });
+
+    if (!group) return res.status(404).json({ message: 'Group not found' });
+
+    const currentMember = group.members.find(m => m.userId === currentUserId);
+    const isOwner = req.user.role === 'owner';
+    const isCreator = group.createdBy === currentUserId;
+    const isAdmin = currentMember?.isAdmin;
+
+    if (!isOwner && !isCreator && !isAdmin) {
+      return res.status(403).json({ message: 'Only group admins or MD can add members' });
+    }
+
+    const existingUserIds = new Set(group.members.map(m => m.userId));
+    const newMemberIds = memberIdsToAdd.filter(id => !existingUserIds.has(id));
+
+    if (newMemberIds.length === 0) {
+      return res.status(400).json({ message: 'Selected user(s) are already members of this group' });
+    }
+
+    const activeUsers = await prisma.user.findMany({
+      where: { id: { in: newMemberIds }, isActive: true },
+      select: { id: true }
+    });
+
+    const validNewIds = activeUsers.map(u => u.id);
+
+    if (validNewIds.length > 0) {
+      await prisma.chatGroupMember.createMany({
+        data: validNewIds.map(id => ({
+          groupId,
+          userId: id,
+          isAdmin: false,
+          lastReadAt: new Date()
+        }))
+      });
+    }
+
+    const updatedGroup = await prisma.chatGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: { include: { user: { select: chatUserSelect } }, orderBy: { joinedAt: 'asc' } },
+        messages: {
+          take: 1,
+          orderBy: { createdAt: 'desc' },
+          include: { senderUser: { select: chatUserSelect } }
+        }
+      }
+    });
+
+    res.json({ ...updatedGroup, lastMessage: updatedGroup?.messages[0] || null, messages: undefined });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Remove member from chat group
+router.delete('/chat/groups/:groupId/members/:targetUserId', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const currentUserId = req.user._id.toString();
+    const { groupId, targetUserId } = req.params;
+
+    const group = await prisma.chatGroup.findUnique({
+      where: { id: groupId },
+      include: { members: true }
+    });
+
+    if (!group) return res.status(404).json({ message: 'Group not found' });
+
+    const currentMember = group.members.find(m => m.userId === currentUserId);
+    const isOwner = req.user.role === 'owner';
+    const isCreator = group.createdBy === currentUserId;
+    const isAdmin = currentMember?.isAdmin;
+    const isSelf = currentUserId === targetUserId;
+
+    if (!isOwner && !isCreator && !isAdmin && !isSelf) {
+      return res.status(403).json({ message: 'Only group admins or MD can remove members' });
+    }
+
+    const memberToRemove = group.members.find(m => m.userId === targetUserId);
+    if (!memberToRemove) {
+      return res.status(404).json({ message: 'Member is not in this group' });
+    }
+
+    await prisma.chatGroupMember.delete({
+      where: { id: memberToRemove.id }
+    });
+
+    const updatedGroup = await prisma.chatGroup.findUnique({
+      where: { id: groupId },
+      include: {
+        members: { include: { user: { select: chatUserSelect } }, orderBy: { joinedAt: 'asc' } },
+        messages: {
+          take: 1,
+          orderBy: { createdAt: 'desc' },
+          include: { senderUser: { select: chatUserSelect } }
+        }
+      }
+    });
+
+    res.json({ ...updatedGroup, lastMessage: updatedGroup?.messages[0] || null, messages: undefined });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+
 router.get('/chat/groups/:groupId/messages', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
     const userId = req.user._id.toString();
