@@ -1508,7 +1508,8 @@ function checkAndResetTask(task) {
 // Task Routes
 router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'work.dashboard.view']), async (req, res) => {
   try {
-    const tasks = await Task.find()
+    const taskFilter = req.user.role === 'owner' ? {} : { assignedTo: req.user._id };
+    const tasks = await Task.find(taskFilter)
       .populate('assignedTo', 'name username')
       .populate('completedBy', 'name username')
       .sort({ taskType: 1, createdAt: 1 });
@@ -1522,7 +1523,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
     }
     
     if (updated) {
-      const refreshedTasks = await Task.find()
+      const refreshedTasks = await Task.find(taskFilter)
         .populate('assignedTo', 'name username')
         .populate('completedBy', 'name username')
         .sort({ taskType: 1, createdAt: 1 });
