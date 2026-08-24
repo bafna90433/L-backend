@@ -207,16 +207,23 @@ router.put('/auth/profile', authMiddleware, async (req, res) => {
     if (upiId !== undefined) user.upiId = upiId;
 
     await user.save();
+    const access = await resolveUserPermissions(user);
+
     res.json({ 
       message: 'Profile updated successfully', 
       user: {
         id: user._id,
+        _id: user._id,
         username: user.username,
         name: user.name,
         role: user.role,
-        whatsapp: user.whatsapp,
-        imageUrl: user.imageUrl,
-        upiId: user.upiId || ''
+        whatsapp: user.whatsapp || '',
+        imageUrl: user.imageUrl || '',
+        upiId: user.upiId || '',
+        roleId: access.roleId,
+        roleName: access.roleName,
+        permissions: access.permissions,
+        isActive: access.isActive
       } 
     });
   } catch (error) {
@@ -404,6 +411,48 @@ router.put('/admin/staff/:id', authMiddleware, ownerOnlyMiddleware, async (req, 
   } catch (error) {
     if (error.code === 'P2002') return res.status(400).json({ message: 'Username already exists' });
     res.status(500).json({ message: error.message });
+  }
+});
+
+router.delete('/admin/staff/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ message: 'Staff user not found' });
+    if (existing.role === 'owner') return res.status(400).json({ message: 'Cannot delete owner account' });
+    
+    const staffId = existing.id;
+
+    // Delete dependent records in proper sequential order
+    try {
+      await prisma.chatGroupMember.deleteMany({ where: { userId: staffId } });
+      await prisma.groupMessage.deleteMany({ where: { sender: staffId } });
+      await prisma.chatGroup.deleteMany({ where: { createdBy: staffId } });
+      await prisma.message.deleteMany({ where: { OR: [{ sender: staffId }, { receiver: staffId }] } });
+      await prisma.task.deleteMany({ where: { OR: [{ assignedTo: staffId }, { completedBy: staffId }] } });
+      await prisma.reminder.deleteMany({ where: { OR: [{ createdBy: staffId }, { targetStaffId: staffId }, { acknowledgedBy: staffId }] } });
+      
+      // Clear advance request expenseTx references before deleting cashTx
+      await prisma.advanceRequest.updateMany({
+        where: { OR: [{ requestedBy: staffId }, { approvedBy: staffId }] },
+        data: { expenseTxId: null }
+      });
+      await prisma.advanceRequest.deleteMany({ where: { OR: [{ requestedBy: staffId }, { approvedBy: staffId }] } });
+      await prisma.cashTx.deleteMany({ where: { staffId: staffId } });
+
+      await prisma.user.delete({ where: { id: staffId } });
+      return res.json({ message: 'Staff member deleted successfully' });
+    } catch (dbErr) {
+      console.error('Cascade delete error, falling back to account deactivation:', dbErr);
+      // Fallback: If DB integrity constraints prevent hard deletion, deactivate account
+      await prisma.user.update({
+        where: { id: staffId },
+        data: { isActive: false }
+      });
+      return res.json({ message: 'Staff account deactivated successfully.' });
+    }
+  } catch (error) {
+    console.error('Delete staff main error:', error);
+    res.status(500).json({ message: error.message || 'Could not delete staff member' });
   }
 });
 
@@ -1771,16 +1820,16 @@ const chatUserSelect = { id: true, name: true, username: true, role: true, image
 router.get('/chat/users', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
   try {
     await prisma.user.updateMany({
-      where: { username: 'dev123' },
+      where: { username: { in: ['dev123', 'rishi'] } },
       data: { isActive: false }
     }).catch(() => {});
 
     const users = await prisma.user.findMany({
-      where: { isActive: true, username: { not: 'dev123' } },
-      select: chatUserSelect,
+      where: { isActive: true, username: { notIn: ['dev123', 'rishi'] } },
+      select: { ...chatUserSelect, isActive: true },
       orderBy: { name: 'asc' }
     });
-    res.json(users.filter(user => user.id !== req.user._id.toString()));
+    res.json(users.filter(user => user.id !== req.user._id.toString() && user.isActive !== false));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -2104,6 +2153,28 @@ router.delete('/messages/:userId', authMiddleware, permissionMiddleware('chat.us
     });
     
     res.json({ message: 'Chat cleared successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Single direct message delete
+router.delete('/messages/single/:id', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const msgId = req.params.id;
+    await prisma.message.deleteMany({ where: { id: msgId } });
+    res.json({ message: 'Message deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Single group message delete
+router.delete('/chat/groups/messages/:id', authMiddleware, permissionMiddleware('chat.use'), async (req, res) => {
+  try {
+    const msgId = req.params.id;
+    await prisma.groupMessage.deleteMany({ where: { id: msgId } });
+    res.json({ message: 'Group message deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
