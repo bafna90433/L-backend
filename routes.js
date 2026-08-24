@@ -1639,7 +1639,6 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
     if (updated) {
       const refreshedTasks = await Task.find(taskFilter)
         .populate('assignedTo', 'name username')
-        .populate('createdBy', 'name username role')
         .populate('completedBy', 'name username')
         .sort({ taskType: 1, createdAt: 1 });
       return res.json(refreshedTasks);
@@ -1681,11 +1680,17 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
     });
     await task.save();
 
-    const populated = await Task.findById(task._id)
-      .populate('assignedTo', 'name username')
-      .populate('createdBy', 'name username role');
-    res.status(201).json(populated);
+    let populated;
+    try {
+      populated = await Task.findById(task._id)
+        .populate('assignedTo', 'name username')
+        .populate('completedBy', 'name username');
+    } catch (e) {
+      populated = task;
+    }
+    res.status(201).json(populated || task);
   } catch (error) {
+    console.error('Task creation error:', error);
     res.status(500).json({ message: error.message });
   }
 });
