@@ -1652,7 +1652,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
 
 router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.create']), async (req, res) => {
   try {
-    const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup, createdByRole } = req.body;
+    const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup, createdByRole, language } = req.body;
     if (!title) {
       return res.status(400).json({ message: 'Task title is required' });
     }
@@ -1664,6 +1664,10 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
     }
 
     const effectiveRole = req.user.role === 'owner' ? 'owner' : (createdByRole || 'staff');
+    let finalDesc = description || '';
+    if (language && !finalDesc.includes('[lang:')) {
+      finalDesc = `[lang:${language}] ${finalDesc}`.trim();
+    }
 
     const task = new Task({
       title,
@@ -1672,7 +1676,7 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
       assignedTo: finalAssignedTo || null,
       createdBy: req.user._id,
       createdByRole: effectiveRole,
-      description: description || '',
+      description: finalDesc,
       remarks: remarks || '',
       nextFollowup: nextFollowup || '',
       seenByOwner: req.user.role === 'owner',
@@ -1929,16 +1933,30 @@ router.get('/public/task-announcements', async (req, res) => {
   }
 });
 
-// REAL HUMAN NEURAL VOICE GENERATOR ENDPOINT (100% STUDIO QUALITY REAL HUMAN VOICE)
+// REAL HUMAN NEURAL VOICE GENERATOR ENDPOINT (MULTI-LANGUAGE: EN, HI, TA - 100% STUDIO MALE VOICE)
 router.post('/ai/tts', async (req, res) => {
   try {
-    const { text, voice } = req.body;
+    const { text, lang = 'en', voice } = req.body;
     if (!text) return res.status(400).json({ message: 'Text is required' });
 
-    // Strategy 1: Microsoft Neural 24kHz HD Voice (en-US-AndrewNeural - 100% Real Natural Male Human Voice)
+    // Determine appropriate Male Neural Voice based on language
+    let defaultVoice = 'en-US-AndrewNeural';
+    let googleLang = 'en';
+
+    if (lang === 'hi') {
+      defaultVoice = 'hi-IN-MadhurNeural';
+      googleLang = 'hi';
+    } else if (lang === 'ta') {
+      defaultVoice = 'ta-IN-ValluvarNeural';
+      googleLang = 'ta';
+    }
+
+    const selectedVoice = voice || defaultVoice;
+
+    // Strategy 1: Microsoft Neural 24kHz HD Male Voice
     try {
       const tts = new MsEdgeTTS();
-      await tts.setMetadata(voice || 'en-US-AndrewNeural', OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      await tts.setMetadata(selectedVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
       const { audioStream } = tts.toStream(text);
       
       const chunks = [];
@@ -1954,16 +1972,17 @@ router.post('/ai/tts', async (req, res) => {
         return res.json({
           audioContent: base64,
           mimeType: 'audio/mp3',
-          type: 'neural-hd-human-voice'
+          type: 'neural-hd-human-voice',
+          lang: googleLang
         });
       }
     } catch (edgeErr) {
-      console.warn('Neural HD Voice error:', edgeErr.message);
+      console.warn(`Neural HD Voice error for ${selectedVoice}:`, edgeErr.message);
     }
 
-    // Strategy 2: Google Natural Audio Engine (Pure Natural English Voice stream fallback)
+    // Strategy 2: Google Natural Audio Engine (Language specific)
     const encodedText = encodeURIComponent(text.slice(0, 300));
-    const audioUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=en&client=tw-ob`;
+    const audioUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${googleLang}&client=tw-ob`;
     const audioRes = await fetch(audioUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -1973,7 +1992,7 @@ router.post('/ai/tts', async (req, res) => {
     if (audioRes.ok) {
       const buffer = await audioRes.arrayBuffer();
       const base64 = Buffer.from(buffer).toString('base64');
-      return res.json({ audioContent: base64, mimeType: 'audio/mp3', type: 'natural' });
+      return res.json({ audioContent: base64, mimeType: 'audio/mp3', type: 'natural', lang: googleLang });
     }
 
     res.status(500).json({ message: 'Unable to stream natural voice' });
