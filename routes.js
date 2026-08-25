@@ -135,7 +135,7 @@ router.post('/auth/register', async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = new User({ username, password: hashedPassword, name, role });
     await user.save();
-    
+
     res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
     console.error(error);
@@ -210,8 +210,8 @@ router.put('/auth/profile', authMiddleware, async (req, res) => {
     await user.save();
     const access = await resolveUserPermissions(user);
 
-    res.json({ 
-      message: 'Profile updated successfully', 
+    res.json({
+      message: 'Profile updated successfully',
       user: {
         id: user._id,
         _id: user._id,
@@ -225,7 +225,7 @@ router.put('/auth/profile', authMiddleware, async (req, res) => {
         roleName: access.roleName,
         permissions: access.permissions,
         isActive: access.isActive
-      } 
+      }
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -420,7 +420,7 @@ router.delete('/admin/staff/:id', authMiddleware, ownerOnlyMiddleware, async (re
     const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!existing) return res.status(404).json({ message: 'Staff user not found' });
     if (existing.role === 'owner') return res.status(400).json({ message: 'Cannot delete owner account' });
-    
+
     const staffId = existing.id;
 
     // Delete dependent records in proper sequential order
@@ -431,7 +431,7 @@ router.delete('/admin/staff/:id', authMiddleware, ownerOnlyMiddleware, async (re
       await prisma.message.deleteMany({ where: { OR: [{ sender: staffId }, { receiver: staffId }] } });
       await prisma.task.deleteMany({ where: { OR: [{ assignedTo: staffId }, { completedBy: staffId }] } });
       await prisma.reminder.deleteMany({ where: { OR: [{ createdBy: staffId }, { targetStaffId: staffId }, { acknowledgedBy: staffId }] } });
-      
+
       // Clear advance request expenseTx references before deleting cashTx
       await prisma.advanceRequest.updateMany({
         where: { OR: [{ requestedBy: staffId }, { approvedBy: staffId }] },
@@ -459,9 +459,17 @@ router.delete('/admin/staff/:id', authMiddleware, ownerOnlyMiddleware, async (re
 
 router.get('/owner', authMiddleware, async (req, res) => {
   try {
-    const owner = await User.findOne({ role: 'owner' }).select('name username _id whatsapp imageUrl');
+    let owner = await User.findOne({ role: 'owner', imageUrl: { $exists: true, $nin: ['', null] } }).select('name username _id whatsapp imageUrl');
+    if (!owner) {
+      owner = await User.findOne({ role: 'owner' }).select('name username _id whatsapp imageUrl');
+    }
     if (!owner) return res.status(404).json({ message: 'Owner not found' });
-    res.json(owner);
+    
+    const ownerObj = owner.toObject ? owner.toObject() : owner;
+    if (!ownerObj.imageUrl) {
+      ownerObj.imageUrl = 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=200';
+    }
+    res.json(ownerObj);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -494,7 +502,7 @@ router.post('/labours', authMiddleware, permissionMiddleware('labours.manage'), 
     if (!name || !whatsapp || monthlySalary === undefined) {
       return res.status(400).json({ message: 'Name, WhatsApp, and Monthly Salary are required' });
     }
-    
+
     // Calculate workingHours from shiftStart and shiftEnd
     let computedHours = 8;
     if (shiftStart && shiftEnd) {
@@ -505,13 +513,13 @@ router.post('/labours', authMiddleware, permissionMiddleware('labours.manage'), 
       computedHours = Number(diff.toFixed(2));
     }
 
-    const labour = new Labour({ 
-      name, whatsapp, monthlySalary, 
-      shiftStart: shiftStart || '08:30', 
+    const labour = new Labour({
+      name, whatsapp, monthlySalary,
+      shiftStart: shiftStart || '08:30',
       shiftEnd: shiftEnd || '20:30',
-      workingHours: computedHours, 
+      workingHours: computedHours,
       gender: gender || 'Male',
-      imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode 
+      imageUrl, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode
     });
     await labour.save();
     res.status(201).json(labour);
@@ -525,15 +533,15 @@ router.put('/labours/:id', authMiddleware, permissionMiddleware('labours.manage'
     const { name, whatsapp, monthlySalary, shiftStart, shiftEnd, gender, imageUrl, status, employeeType, department, phonePeNumber, upiId, phonePeQrUrl, empCode } = req.body;
     const labour = await Labour.findById(req.params.id);
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
-    
+
     if (name) labour.name = name;
     if (whatsapp) labour.whatsapp = whatsapp;
     if (monthlySalary !== undefined) labour.monthlySalary = monthlySalary;
-    
+
     if (gender !== undefined) labour.gender = gender;
     if (shiftStart !== undefined) labour.shiftStart = shiftStart;
     if (shiftEnd !== undefined) labour.shiftEnd = shiftEnd;
-    
+
     // Recalculate workingHours if shift changes
     if (shiftStart !== undefined || shiftEnd !== undefined) {
       const start = shiftStart || labour.shiftStart;
@@ -578,11 +586,11 @@ router.get('/attendance', authMiddleware, permissionMiddleware('attendance.view'
   try {
     const { labourId, month, year, startDate, endDate } = req.query;
     let query = {};
-    
+
     if (labourId) {
       query.labourId = labourId;
     }
-    
+
     if (month && year) {
       const start = new Date(year, month - 1, 1);
       const end = new Date(year, month, 0, 23, 59, 59);
@@ -590,7 +598,7 @@ router.get('/attendance', authMiddleware, permissionMiddleware('attendance.view'
     } else if (startDate && endDate) {
       query.date = { $gte: new Date(startDate), $lte: new Date(endDate) };
     }
-    
+
     const records = await Attendance.find(query).sort({ date: 1 });
     res.json(records);
   } catch (error) {
@@ -608,17 +616,17 @@ router.post('/attendance/bulk', authMiddleware, ownerOnlyMiddleware, async (req,
     const operations = records.map(record => {
       const parsedDate = new Date(record.date);
       // Strip time to store clean date
-      parsedDate.setUTCHours(0,0,0,0);
-      
+      parsedDate.setUTCHours(0, 0, 0, 0);
+
       return {
         updateOne: {
           filter: { labourId: record.labourId, date: parsedDate },
-          update: { 
-            $set: { 
-              status: record.status, 
+          update: {
+            $set: {
+              status: record.status,
               permissionHours: record.permissionHours || 0,
-              remarks: record.remarks || '' 
-            } 
+              remarks: record.remarks || ''
+            }
           },
           upsert: true
         }
@@ -661,10 +669,10 @@ router.post('/attendance/mark', authMiddleware, permissionMiddleware('attendance
       return res.status(400).json({ message: 'labourId is required' });
     }
     const recordStatus = status || 'present';
-    
+
     // Strip time to store clean date (midnight UTC)
     const today = new Date();
-    today.setUTCHours(0,0,0,0);
+    today.setUTCHours(0, 0, 0, 0);
 
     const record = await Attendance.findOneAndUpdate(
       { labourId, date: today },
@@ -699,10 +707,10 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
 
     for (const punch of punches) {
       const { empCode, first_name, last_name, punch_time, punch_state, terminal_sn } = punch;
-      
+
       // 1. Try to find the labourer by empCode
       let labour = activeLabourers.find(l => l.empCode === String(empCode));
-      
+
       // 2. Fallback to name search if empCode not set
       if (!labour && first_name) {
         const fullName = `${first_name} ${last_name || ''}`.trim().toLowerCase();
@@ -723,7 +731,7 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
       let existingRecord = await Attendance.findOne({ labourId: labour._id, date: cleanPunchDate });
 
       let currentPunches = existingRecord ? [...existingRecord.punches] : [];
-      
+
       // Add the new punch if not already present
       const punchTimeStr = punchDate.toISOString();
       const alreadyPunched = currentPunches.some(p => new Date(p).toISOString() === punchTimeStr);
@@ -761,7 +769,7 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
       }
 
       const awayHours = deficit;
-      
+
       let status = 'present';
       let isPermissionApproved = false;
 
@@ -804,11 +812,11 @@ router.post('/attendance/zkteco-sync', async (req, res) => {
       successCount++;
     }
 
-    res.json({ 
-      message: 'Sync completed', 
-      processed: punches.length, 
-      successCount, 
-      errors 
+    res.json({
+      message: 'Sync completed',
+      processed: punches.length,
+      successCount,
+      errors
     });
   } catch (error) {
     console.error('ZKTeco Sync Error:', error);
@@ -832,7 +840,7 @@ router.post('/attendance/:id/permission', authMiddleware, permissionMiddleware('
     const requiredHours = (record.labourId && record.labourId.workingHours) ? record.labourId.workingHours : 8;
 
     record.isPermissionApproved = isApproved;
-    
+
     // Recalculate status and effective hours based on new permission approval status
     const permissionHours = isApproved ? record.awayHours : 0;
     record.permissionHours = permissionHours;
@@ -895,7 +903,7 @@ router.get('/expenses', authMiddleware, permissionMiddleware('expenses.view'), a
 router.get('/expenses/balance', authMiddleware, permissionMiddleware('expenses.view'), async (req, res) => {
   try {
     const txs = await CashTx.find();
-    
+
     let totalReceived = 0;
     let totalSpent = 0;
     let onlineReceived = 0;
@@ -955,7 +963,7 @@ router.get('/expenses/balance', authMiddleware, permissionMiddleware('expenses.v
 router.post('/expenses/cash-received', authMiddleware, permissionMiddleware('expenses.create'), async (req, res) => {
   try {
     const { amount, date, description, staffId, paymentMode } = req.body;
-    
+
     // If the creator is staff, force the receiver (staffId) to be themselves.
     // If owner, they can specify any staff member's ID.
     let targetStaffId = staffId;
@@ -997,7 +1005,7 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
     if (!amount || !date || !category) {
       return res.status(400).json({ message: 'Amount, date, and category are required' });
     }
-    
+
     if (category === 'received') {
       return res.status(400).json({ message: 'Invalid category for expense' });
     }
@@ -1021,19 +1029,19 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
     // If it's a salary payment and advance is deducted, update the AdvanceRequests
     if (category === 'salary-payment' && labourId && advanceDeducted && parseFloat(advanceDeducted) > 0) {
       let remainingToDeduct = parseFloat(advanceDeducted);
-      
+
       // Find all approved advances for this labourer
       const approvedAdvances = await AdvanceRequest.find({
         labourId,
         status: 'approved'
       }).sort({ date: 1 }); // oldest first
-      
+
       for (const adv of approvedAdvances) {
         if (remainingToDeduct <= 0) break;
-        
+
         const currentDeducted = adv.deductedAmount || 0;
         const availableToDeduct = adv.amount - currentDeducted;
-        
+
         if (availableToDeduct > 0) {
           const deductNow = Math.min(remainingToDeduct, availableToDeduct);
           adv.deductedAmount = currentDeducted + deductNow;
@@ -1069,7 +1077,7 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
 router.put('/expenses/:id', authMiddleware, permissionMiddleware('expenses.manage'), async (req, res) => {
   try {
     const { amount, date, category, description, paymentMode } = req.body;
-    
+
     // Staff can only edit their own logs unless they are the owner
     let query = { _id: req.params.id };
     if (req.user.role !== 'owner') {
@@ -1087,13 +1095,13 @@ router.put('/expenses/:id', authMiddleware, permissionMiddleware('expenses.manag
     }
     if (amount !== undefined) tx.amount = Number(amount);
     if (date !== undefined) tx.date = new Date(date);
-    
+
     if (tx.txType === 'received') {
       tx.category = 'received';
     } else if (category !== undefined) {
       tx.category = category;
     }
-    
+
     if (description !== undefined) tx.description = description;
     if (paymentMode !== undefined) tx.paymentMode = paymentMode;
 
@@ -1190,8 +1198,8 @@ router.post('/advances/request', authMiddleware, permissionMiddleware('advances.
       });
 
       if (outstandingAdvanceExists) {
-        return res.status(400).json({ 
-          message: 'This employee already has a pending request or an active outstanding advance balance.' 
+        return res.status(400).json({
+          message: 'This employee already has a pending request or an active outstanding advance balance.'
         });
       }
     }
@@ -1224,7 +1232,7 @@ router.post('/advances/request', authMiddleware, permissionMiddleware('advances.
         category: isCompanyExpense ? 'received' : 'salary-advance',
         amount: parseFloat(amount),
         date: new Date(date || Date.now()),
-        description: isCompanyExpense 
+        description: isCompanyExpense
           ? `Cash received for Company Expenses (Auto-Approved). Reason: ${reason || ''}`
           : `Advance paid to ${labour.name} (Auto-Approved). Reason: ${reason || ''}`,
         staffId: req.user._id,
@@ -1299,7 +1307,7 @@ router.get('/advances', authMiddleware, permissionMiddleware('advances.view'), a
       .populate('requestedBy', 'name username role upiId')
       .populate('approvedBy', 'name username role')
       .sort({ date: -1 });
-      
+
     res.json(requests);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1396,7 +1404,7 @@ router.get('/reminders', authMiddleware, permissionMiddleware('reminders.view'),
         ]
       };
     }
-    
+
     const reminders = await Reminder.find(query)
       .populate('createdBy', 'name username')
       .populate('acknowledgedBy', 'name username')
@@ -1422,7 +1430,7 @@ router.post('/reminders/self', authMiddleware, permissionMiddleware('reminders.v
       createdBy: req.user._id
     });
     await reminder.save();
-    
+
     const populated = await Reminder.findById(reminder._id)
       .populate('createdBy', 'name username');
     res.json(populated);
@@ -1567,7 +1575,7 @@ router.delete('/reminders/:id', authMiddleware, ownerOnlyMiddleware, async (req,
 // Helper for task auto-reset
 function checkAndResetTask(task) {
   if (task.status !== 'completed' || !task.completedAt) return false;
-  
+
   const actualNow = new Date();
   const actualComp = new Date(task.completedAt);
 
@@ -1578,7 +1586,7 @@ function checkAndResetTask(task) {
   const offsetMs = task.taskType === 'regular' ? 0 : (8 * 60 + 30) * 60 * 1000; // 8.5 hours in milliseconds
   const now = new Date(actualNow.getTime() - offsetMs);
   const comp = new Date(actualComp.getTime() - offsetMs);
-  
+
   let shouldReset = false;
   if (task.frequency === 'daily') {
     shouldReset = now.toDateString() !== comp.toDateString();
@@ -1593,7 +1601,7 @@ function checkAndResetTask(task) {
         const diff = d.getDate() - day + (day === 0 ? -6 : 1);
         const start = new Date(d);
         start.setDate(diff);
-        start.setHours(0,0,0,0);
+        start.setHours(0, 0, 0, 0);
         return start;
       };
       shouldReset = getStartOfWeek(now).getTime() !== getStartOfWeek(comp).getTime();
@@ -1601,7 +1609,7 @@ function checkAndResetTask(task) {
   } else if (task.frequency === 'monthly') {
     shouldReset = now.getMonth() !== comp.getMonth() || now.getFullYear() !== comp.getFullYear();
   }
-  
+
   if (shouldReset) {
     task.status = 'pending';
     task.completedBy = null;
@@ -1616,11 +1624,11 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
   try {
     const taskFilter = req.user.role === 'owner' ? {} : { assignedTo: req.user._id };
     const tasks = await Task.find(taskFilter)
-      .populate('assignedTo', 'name username')
-      .populate('createdBy', 'name username role')
-      .populate('completedBy', 'name username')
+      .populate('assignedTo', 'name username imageUrl')
+      .populate('createdBy', 'name username role imageUrl')
+      .populate('completedBy', 'name username imageUrl')
       .sort({ taskType: 1, createdAt: 1 });
-    
+
     let updated = false;
     for (let task of tasks) {
       if (task.title && (task.title.startsWith('📌 Task:') || task.title.includes('Action Required:'))) {
@@ -1635,15 +1643,16 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
         updated = true;
       }
     }
-    
+
     if (updated) {
       const refreshedTasks = await Task.find(taskFilter)
-        .populate('assignedTo', 'name username')
-        .populate('completedBy', 'name username')
+        .populate('assignedTo', 'name username imageUrl')
+        .populate('createdBy', 'name username role imageUrl')
+        .populate('completedBy', 'name username imageUrl')
         .sort({ taskType: 1, createdAt: 1 });
       return res.json(refreshedTasks);
     }
-    
+
     res.json(tasks);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1656,7 +1665,7 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
     if (!title) {
       return res.status(400).json({ message: 'Task title is required' });
     }
-    
+
     // If the creator is not an owner, automatically assign it to themselves
     let finalAssignedTo = assignedTo;
     if (req.user.role !== 'owner') {
@@ -1703,12 +1712,12 @@ router.post('/tasks/:id/complete', authMiddleware, anyPermissionMiddleware(['tas
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
-    
+
     task.status = 'completed';
     task.completedBy = req.user._id;
     task.completedAt = new Date();
     await task.save();
-    
+
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
       .populate('createdBy', 'name username role')
@@ -1723,13 +1732,13 @@ router.post('/tasks/:id/seen', authMiddleware, permissionMiddleware('tasks.view'
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
-    
+
     if (req.user.role === 'owner') {
       task.seenByOwner = true;
       task.seenAt = new Date();
       await task.save();
     }
-    
+
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
       .populate('createdBy', 'name username role')
@@ -1744,12 +1753,12 @@ router.post('/tasks/:id/reset', authMiddleware, ownerOnlyMiddleware, async (req,
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
-    
+
     task.status = 'pending';
     task.completedBy = null;
     task.completedAt = null;
     await task.save();
-    
+
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
       .populate('createdBy', 'name username role')
@@ -1764,10 +1773,10 @@ router.post('/tasks/:id/comment', authMiddleware, anyPermissionMiddleware(['task
   try {
     const { text } = req.body;
     if (!text) return res.status(400).json({ message: 'Comment text is required' });
-    
+
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
-    
+
     task.comments.push({
       authorName: req.user.name,
       authorRole: req.user.role,
@@ -1775,7 +1784,7 @@ router.post('/tasks/:id/comment', authMiddleware, anyPermissionMiddleware(['task
       createdAt: new Date()
     });
     await task.save();
-    
+
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
       .populate('createdBy', 'name username role')
@@ -1829,7 +1838,7 @@ router.put('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage'
     if (nextFollowup !== undefined) task.nextFollowup = nextFollowup;
 
     await task.save();
-    
+
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
       .populate('createdBy', 'name username role')
@@ -1910,7 +1919,7 @@ router.post('/ai/chat', authMiddleware, async (req, res) => {
     // Smart fallback if API key is invalid/expired
     if (!replyText) {
       console.warn('Gemini API unreachable or key invalid. Using Smart AI Task Refiner fallback. Error:', lastError);
-      
+
       const cleanPrompt = prompt.replace(/^User request:\s*/i, '').replace(/^Refine and improve.*?"(.*)"$/i, '$1').trim();
       const words = cleanPrompt.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
       replyText = words;
@@ -1972,7 +1981,7 @@ router.post('/ai/tts', async (req, res) => {
       const tts = new MsEdgeTTS();
       await tts.setMetadata(selectedVoice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
       const { audioStream } = tts.toStream(text);
-      
+
       const chunks = [];
       await new Promise((resolve, reject) => {
         audioStream.on('data', chunk => chunks.push(chunk));
@@ -2024,7 +2033,7 @@ router.get('/chat/users', authMiddleware, permissionMiddleware('chat.use'), asyn
     await prisma.user.updateMany({
       where: { username: { in: ['dev123', 'rishi'] } },
       data: { isActive: false }
-    }).catch(() => {});
+    }).catch(() => { });
 
     const users = await prisma.user.findMany({
       where: { isActive: true, username: { notIn: ['dev123', 'rishi'] } },
@@ -2345,7 +2354,7 @@ router.delete('/messages/:userId', authMiddleware, permissionMiddleware('chat.us
   try {
     const targetId = req.params.userId;
     const currentUserId = req.user._id;
-    
+
     // Delete all messages between current user and target user
     await Message.deleteMany({
       $or: [
@@ -2353,7 +2362,7 @@ router.delete('/messages/:userId', authMiddleware, permissionMiddleware('chat.us
         { sender: targetId, receiver: currentUserId }
       ]
     });
-    
+
     res.json({ message: 'Chat cleared successfully' });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -2483,10 +2492,10 @@ router.post('/kiosk/attendance/mark', async (req, res) => {
       return res.status(400).json({ message: 'labourId is required' });
     }
     const recordStatus = status || 'present';
-    
+
     // Strip time to store clean date (midnight UTC)
     const today = new Date();
-    today.setUTCHours(0,0,0,0);
+    today.setUTCHours(0, 0, 0, 0);
 
     const record = await Attendance.findOneAndUpdate(
       { labourId, date: today },
@@ -2551,7 +2560,7 @@ router.get('/kiosk/settings/kiosk_alarm', async (req, res) => {
 router.get('/kiosk/attendance/status/:labourId', async (req, res) => {
   try {
     const today = new Date();
-    today.setUTCHours(0,0,0,0);
+    today.setUTCHours(0, 0, 0, 0);
     const record = await Attendance.findOne({ labourId: req.params.labourId, date: today });
     res.json({ punched: !!record, status: record ? record.status : null });
   } catch (error) {
