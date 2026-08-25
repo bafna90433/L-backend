@@ -10,9 +10,10 @@ const PORT = process.env.PORT || 5000;
 
 // Enable CORS
 app.use(cors({
-  origin: '*', // For development allow all
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
 }));
 
 // Parse JSON and URL-encoded bodies
