@@ -1788,7 +1788,7 @@ router.post('/tasks/:id/comment', authMiddleware, anyPermissionMiddleware(['task
 
 router.put('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.edit']), async (req, res) => {
   try {
-    const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup } = req.body;
+    const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup, language } = req.body;
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
@@ -1810,7 +1810,21 @@ router.put('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage'
       if (assignedTo !== undefined) task.assignedTo = assignedTo;
     }
 
-    if (description !== undefined) task.description = description;
+    if (language !== undefined) {
+      task.language = language;
+    }
+
+    if (description !== undefined) {
+      let finalDesc = description;
+      if (language && !finalDesc.startsWith('[lang:')) {
+        finalDesc = `[lang:${language}] ${finalDesc.replace(/\[lang:(en|hi|ta)\]\s*/g, '').trim()}`;
+      }
+      task.description = finalDesc;
+    } else if (language) {
+      const currentDesc = (task.description || '').replace(/\[lang:(en|hi|ta)\]\s*/g, '').trim();
+      task.description = `[lang:${language}] ${currentDesc}`;
+    }
+
     if (remarks !== undefined) task.remarks = remarks;
     if (nextFollowup !== undefined) task.nextFollowup = nextFollowup;
 
