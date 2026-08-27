@@ -1627,7 +1627,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
       .populate('assignedTo', 'name username imageUrl')
       .populate('createdBy', 'name username role imageUrl')
       .populate('completedBy', 'name username imageUrl')
-      .sort({ taskType: 1, createdAt: 1 });
+      .sort({ taskType: 1, createdAt: -1 });
 
     let updated = false;
     for (let task of tasks) {
@@ -1649,7 +1649,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
         .populate('assignedTo', 'name username imageUrl')
         .populate('createdBy', 'name username role imageUrl')
         .populate('completedBy', 'name username imageUrl')
-        .sort({ taskType: 1, createdAt: 1 });
+        .sort({ taskType: 1, createdAt: -1 });
       return res.json(refreshedTasks);
     }
 
