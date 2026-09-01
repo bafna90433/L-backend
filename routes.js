@@ -962,7 +962,7 @@ router.get('/expenses/balance', authMiddleware, permissionMiddleware('expenses.v
 // Owner gives cash to office staff (received transaction)
 router.post('/expenses/cash-received', authMiddleware, permissionMiddleware('expenses.create'), async (req, res) => {
   try {
-    const { amount, date, description, staffId, paymentMode } = req.body;
+    const { amount, date, description, staffId, labourId, paymentMode } = req.body;
 
     // If the creator is staff, force the receiver (staffId) to be themselves.
     // If owner, they can specify any staff member's ID.
@@ -975,10 +975,23 @@ router.post('/expenses/cash-received', authMiddleware, permissionMiddleware('exp
       return res.status(400).json({ message: 'Amount, date, and staffId are required' });
     }
 
+    // Staff Desk recordings must identify the employee/staff member receiving the credit.
+    // Owner transfers already target a staff login account directly and remain compatible.
+    if (req.user.role !== 'owner' && !labourId) {
+      return res.status(400).json({ message: 'Staff member receiving the cash must be selected' });
+    }
+
     // Any active non-owner role can be selected as staff.
     const staffUser = await User.findById(targetStaffId);
     if (!staffUser || staffUser.role === 'owner' || staffUser.isActive === false) {
       return res.status(400).json({ message: 'Valid staff member must be selected to receive the cash' });
+    }
+
+    if (labourId) {
+      const creditedEmployee = await Labour.findById(labourId);
+      if (!creditedEmployee || creditedEmployee.status === 'inactive') {
+        return res.status(400).json({ message: 'Selected staff or employee is not active' });
+      }
     }
 
     const tx = new CashTx({
@@ -988,7 +1001,8 @@ router.post('/expenses/cash-received', authMiddleware, permissionMiddleware('exp
       date: new Date(date),
       description: description || `Cash received from owner`,
       paymentMode: paymentMode || 'handcash',
-      staffId: targetStaffId
+      staffId: targetStaffId,
+      labourId: labourId || null
     });
 
     await tx.save();
@@ -1104,6 +1118,7 @@ router.put('/expenses/:id', authMiddleware, permissionMiddleware('expenses.manag
 
     if (description !== undefined) tx.description = description;
     if (paymentMode !== undefined) tx.paymentMode = paymentMode;
+    if (req.body.labourId !== undefined) tx.labourId = req.body.labourId || null;
 
     await tx.save();
     res.json({ message: 'Transaction updated successfully', transaction: tx });
