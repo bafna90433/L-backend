@@ -36,6 +36,7 @@ model User {
   createdChatGroups     ChatGroup[]       @relation("ChatGroupCreator")
   chatGroupMemberships  ChatGroupMember[]
   sentGroupMessages     GroupMessage[]    @relation("GroupMessageSender")
+  deletedLogs           DeletedLog[]      @relation("DeletedLogUser")
 
   @@index([roleId])
   @@index([isActive])
@@ -181,6 +182,9 @@ model Task {
   comments     Json      @default("[]")
   seenByOwner  Boolean   @default(false)
   seenAt       DateTime?
+  reminderDateTime DateTime?
+  reminderAlarmArmed Boolean @default(false)
+  reminderNote String    @default("")
   createdAt    DateTime  @default(now())
 
   assignee  User? @relation("TaskAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
@@ -188,6 +192,7 @@ model Task {
 
   @@index([status])
   @@index([taskType])
+  @@index([reminderDateTime])
 }
 
 model Message {
@@ -266,4 +271,26 @@ model SystemSetting {
   key       String   @unique
   value     Json
   updatedAt DateTime @default(now())
+}
+
+model DeletedLog {
+  id             String    @id @default(uuid())
+  originalId     String    @default("")
+  itemType       String    @default("Cash Transaction")
+  category       String    @default("")
+  txType         String    @default("expense")
+  amount         Float     @default(0)
+  paymentMode    String    @default("handcash")
+  date           DateTime?
+  description    String    @default("")
+  taggedPerson   String    @default("")
+  loggedByStaff  String    @default("")
+  deletedBy      String
+  deletedByName  String    @default("")
+  deletedAt      DateTime  @default(now())
+
+  deleter User @relation("DeletedLogUser", fields: [deletedBy], references: [id], onDelete: Restrict)
+
+  @@index([deletedAt])
+  @@index([deletedBy])
 }

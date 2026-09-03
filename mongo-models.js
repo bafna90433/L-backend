@@ -102,6 +102,9 @@ const TaskSchema = new mongoose.Schema({
   }],
   seenByOwner: { type: Boolean, default: false },
   seenAt: { type: Date, default: null },
+  reminderDateTime: { type: Date, default: null },
+  reminderAlarmArmed: { type: Boolean, default: false },
+  reminderNote: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now }
 });
 

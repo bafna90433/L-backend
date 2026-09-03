@@ -1173,13 +1173,20 @@ router.delete('/expenses/:id', authMiddleware, permissionMiddleware('expenses.ma
 });
 
 // Fetch all deleted logs for audit
-router.get('/deleted-logs', authMiddleware, permissionMiddleware('expenses.view'), async (req, res) => {
+router.get('/deleted-logs', authMiddleware, async (req, res) => {
   try {
+    if (req.user.role !== 'owner') {
+      const access = resolveUserAccess(req.user);
+      if (!access.permissions.includes('expenses.view') && !access.permissions.includes('expenses.manage')) {
+        return res.status(403).json({ message: 'Forbidden: Insufficient permissions' });
+      }
+    }
     const logs = await DeletedLog.find()
       .populate('deletedBy', 'name username role')
       .sort({ deletedAt: -1, _id: -1 });
-    res.json(logs);
+    res.json(logs || []);
   } catch (error) {
+    console.error('Error fetching deleted logs:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -1496,6 +1503,7 @@ router.post('/reminders', authMiddleware, ownerOnlyMiddleware, async (req, res) 
       targetDate: new Date(targetDate),
       type: type || 'general',
       targetStaffId: targetStaffId || null,
+      status: 'acknowledged',
       createdBy: req.user._id
     });
 
@@ -1676,21 +1684,52 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
 
 router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.create']), async (req, res) => {
   try {
-    const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup, createdByRole, language } = req.body;
+    const { title, taskType, frequency, assignedTo, assignedToStaffIds, description, remarks, nextFollowup, createdByRole, language, reminderDateTime, reminderAlarmArmed, reminderNote } = req.body;
     if (!title) {
       return res.status(400).json({ message: 'Task title is required' });
-    }
-
-    // If the creator is not an owner, automatically assign it to themselves
-    let finalAssignedTo = assignedTo;
-    if (req.user.role !== 'owner') {
-      finalAssignedTo = req.user._id;
     }
 
     const effectiveRole = req.user.role === 'owner' ? 'owner' : (createdByRole || 'staff');
     let finalDesc = description || '';
     if (language && !finalDesc.includes('[lang:')) {
       finalDesc = `[lang:${language}] ${finalDesc}`.trim();
+    }
+
+    const parsedReminderDate = reminderDateTime ? new Date(reminderDateTime) : null;
+    const isArmed = parsedReminderDate ? (reminderAlarmArmed !== undefined ? Boolean(reminderAlarmArmed) : true) : false;
+
+    // Handle multiple staff assignment from MD
+    if (req.user.role === 'owner' && Array.isArray(assignedToStaffIds) && assignedToStaffIds.length > 1) {
+      const createdTasks = [];
+      for (const sId of assignedToStaffIds) {
+        const task = new Task({
+          title,
+          taskType: taskType || 'custom',
+          frequency: frequency || 'one-time',
+          assignedTo: sId || null,
+          createdBy: req.user._id,
+          createdByRole: effectiveRole,
+          description: finalDesc,
+          remarks: remarks || '',
+          nextFollowup: nextFollowup || '',
+          reminderDateTime: parsedReminderDate,
+          reminderAlarmArmed: isArmed,
+          reminderNote: reminderNote || '',
+          seenByOwner: true,
+          seenAt: new Date()
+        });
+        await task.save();
+        createdTasks.push(task);
+      }
+      return res.status(201).json(createdTasks[0]);
+    }
+
+    // If the creator is not an owner, automatically assign it to themselves
+    let finalAssignedTo = assignedTo;
+    if (req.user.role !== 'owner') {
+      finalAssignedTo = req.user._id;
+    } else if (Array.isArray(assignedToStaffIds) && assignedToStaffIds.length === 1) {
+      finalAssignedTo = assignedToStaffIds[0];
     }
 
     const task = new Task({
@@ -1703,6 +1742,9 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
       description: finalDesc,
       remarks: remarks || '',
       nextFollowup: nextFollowup || '',
+      reminderDateTime: parsedReminderDate,
+      reminderAlarmArmed: isArmed,
+      reminderNote: reminderNote || '',
       seenByOwner: req.user.role === 'owner',
       seenAt: req.user.role === 'owner' ? new Date() : null
     });
@@ -1723,12 +1765,13 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
   }
 });
 
-router.post('/tasks/:id/complete', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.edit']), async (req, res) => {
+router.post('/tasks/:id/complete', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
     task.status = 'completed';
+    task.reminderAlarmArmed = false;
     task.completedBy = req.user._id;
     task.completedAt = new Date();
     await task.save();
@@ -1784,6 +1827,64 @@ router.post('/tasks/:id/reset', authMiddleware, ownerOnlyMiddleware, async (req,
   }
 });
 
+router.post('/tasks/:id/set-reminder', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.edit', 'tasks.create', 'tasks.view']), async (req, res) => {
+  try {
+    const { reminderDateTime, reminderNote } = req.body;
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+
+    if (reminderDateTime) {
+      task.reminderDateTime = new Date(reminderDateTime);
+      task.reminderAlarmArmed = true;
+    } else {
+      task.reminderDateTime = null;
+      task.reminderAlarmArmed = false;
+    }
+    if (reminderNote !== undefined) task.reminderNote = reminderNote;
+
+    await task.save();
+
+    const populated = await Task.findById(task._id)
+      .populate('assignedTo', 'name username imageUrl')
+      .populate('createdBy', 'name username role imageUrl')
+      .populate('completedBy', 'name username imageUrl');
+    res.json(populated || task);
+  } catch (error) {
+    console.error('Error setting task reminder:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/tasks/:id/stop-alarm', authMiddleware, async (req, res) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+
+    task.reminderAlarmArmed = false;
+    await task.save();
+
+    res.json({ message: 'Alarm stopped successfully', task });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/tasks/:id/snooze-alarm', authMiddleware, async (req, res) => {
+  try {
+    const { minutes = 5 } = req.body;
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+
+    task.reminderDateTime = new Date(Date.now() + Number(minutes) * 60 * 1000);
+    task.reminderAlarmArmed = true;
+    await task.save();
+
+    res.json({ message: `Alarm snoozed for ${minutes} minutes`, task });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 router.post('/tasks/:id/comment', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.edit']), async (req, res) => {
   try {
     const { text } = req.body;
@@ -1812,7 +1913,7 @@ router.post('/tasks/:id/comment', authMiddleware, anyPermissionMiddleware(['task
 
 router.put('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.edit']), async (req, res) => {
   try {
-    const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup, language } = req.body;
+    const { title, taskType, frequency, assignedTo, description, remarks, nextFollowup, language, reminderDateTime, reminderAlarmArmed, reminderNote } = req.body;
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
@@ -1851,6 +1952,17 @@ router.put('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage'
 
     if (remarks !== undefined) task.remarks = remarks;
     if (nextFollowup !== undefined) task.nextFollowup = nextFollowup;
+    if (reminderDateTime !== undefined) {
+      task.reminderDateTime = reminderDateTime ? new Date(reminderDateTime) : null;
+      if (task.reminderDateTime) {
+        task.reminderAlarmArmed = reminderAlarmArmed !== undefined ? Boolean(reminderAlarmArmed) : true;
+      } else {
+        task.reminderAlarmArmed = false;
+      }
+    } else if (reminderAlarmArmed !== undefined) {
+      task.reminderAlarmArmed = Boolean(reminderAlarmArmed);
+    }
+    if (reminderNote !== undefined) task.reminderNote = reminderNote;
 
     await task.save();
 
@@ -1866,7 +1978,9 @@ router.put('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage'
 
 router.delete('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage', 'tasks.delete']), async (req, res) => {
   try {
-    const task = await Task.findById(req.params.id);
+    const task = await Task.findById(req.params.id)
+      .populate('assignedTo', 'name')
+      .populate('createdBy', 'name');
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
     const isOwner = req.user.role === 'owner';
@@ -1874,6 +1988,28 @@ router.delete('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.mana
 
     if (!isOwner && isMDTask) {
       return res.status(403).json({ message: 'Tasks assigned by MD cannot be deleted by staff' });
+    }
+
+    // Save to DeletedLog audit
+    try {
+      const deletedRecord = new DeletedLog({
+        originalId: task._id ? task._id.toString() : '',
+        itemType: 'Task / Duty',
+        category: task.taskType || 'custom',
+        txType: 'expense',
+        amount: 0,
+        paymentMode: 'handcash',
+        date: task.createdAt || new Date(),
+        description: task.title || '',
+        taggedPerson: task.assignedTo?.name || 'All Staff',
+        loggedByStaff: task.createdBy?.name || (isMDTask ? 'MD' : 'Staff'),
+        deletedBy: req.user._id,
+        deletedByName: req.user.name || req.user.username || 'MD',
+        deletedAt: new Date()
+      });
+      await deletedRecord.save();
+    } catch (auditErr) {
+      console.error('Failed to log deleted task audit:', auditErr);
     }
 
     await Task.findByIdAndDelete(req.params.id);

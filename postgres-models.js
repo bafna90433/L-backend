@@ -46,7 +46,7 @@ const specs = {
   },
   Task: {
     delegate: 'task',
-    fields: ['title', 'taskType', 'frequency', 'status', 'assignedTo', 'completedBy', 'completedAt', 'description', 'remarks', 'nextFollowup', 'comments', 'seenByOwner', 'seenAt', 'createdAt'],
+    fields: ['title', 'taskType', 'frequency', 'status', 'assignedTo', 'completedBy', 'completedAt', 'description', 'remarks', 'nextFollowup', 'comments', 'seenByOwner', 'seenAt', 'reminderDateTime', 'reminderAlarmArmed', 'reminderNote', 'createdAt'],
     populate: {
       assignedTo: { relation: 'assignee', model: 'User' },
       completedBy: { relation: 'completer', model: 'User' }
@@ -67,6 +67,13 @@ const specs = {
   SystemSettings: {
     delegate: 'systemSetting',
     fields: ['key', 'value', 'updatedAt']
+  },
+  DeletedLog: {
+    delegate: 'deletedLog',
+    fields: ['originalId', 'itemType', 'category', 'txType', 'amount', 'paymentMode', 'date', 'description', 'taggedPerson', 'loggedByStaff', 'deletedBy', 'deletedByName', 'deletedAt'],
+    populate: {
+      deletedBy: { relation: 'deleter', model: 'User' }
+    }
   }
 };
 
@@ -362,5 +369,6 @@ module.exports = {
   Message: createModel('Message'),
   Department: createModel('Department'),
   SystemSettings: createModel('SystemSettings'),
+  DeletedLog: createModel('DeletedLog'),
   __testing: { specs, translateWhere, cleanData, uniqueWhereForUpsert }
 };
