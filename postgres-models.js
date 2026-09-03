@@ -46,7 +46,7 @@ const specs = {
   },
   Task: {
     delegate: 'task',
-    fields: ['title', 'taskType', 'frequency', 'status', 'assignedTo', 'completedBy', 'completedAt', 'description', 'remarks', 'nextFollowup', 'comments', 'seenByOwner', 'seenAt', 'reminderDateTime', 'reminderAlarmArmed', 'reminderNote', 'createdAt'],
+    fields: ['title', 'taskType', 'frequency', 'status', 'assignedTo', 'completedBy', 'completedAt', 'description', 'language', 'remarks', 'nextFollowup', 'comments', 'seenByOwner', 'seenAt', 'reminderDateTime', 'reminderAlarmArmed', 'reminderNote', 'createdAt'],
     populate: {
       assignedTo: { relation: 'assignee', model: 'User' },
       completedBy: { relation: 'completer', model: 'User' }

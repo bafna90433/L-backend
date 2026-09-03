@@ -92,6 +92,7 @@ const TaskSchema = new mongoose.Schema({
   completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   completedAt: { type: Date, default: null },
   description: { type: String, default: '' },
+  language: { type: String, enum: ['en', 'hi', 'ta'], default: 'en' },
   remarks: { type: String, default: '' },
   nextFollowup: { type: String, default: '' },
   comments: [{
@@ -161,4 +162,3 @@ module.exports = {
   SystemSettings: model('SystemSettings', SystemSettingsSchema),
   DeletedLog: model('DeletedLog', DeletedLogSchema)
 };
-

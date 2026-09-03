@@ -1690,9 +1690,10 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
     }
 
     const effectiveRole = req.user.role === 'owner' ? 'owner' : (createdByRole || 'staff');
+    const normalizedLanguage = ['en', 'hi', 'ta'].includes(language) ? language : 'en';
     let finalDesc = description || '';
-    if (language && !finalDesc.includes('[lang:')) {
-      finalDesc = `[lang:${language}] ${finalDesc}`.trim();
+    if (language) {
+      finalDesc = `[lang:${normalizedLanguage}] ${finalDesc.replace(/\[lang:(en|hi|ta)\]\s*/g, '').trim()}`.trim();
     }
 
     const parsedReminderDate = reminderDateTime ? new Date(reminderDateTime) : null;
@@ -1710,6 +1711,7 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
           createdBy: req.user._id,
           createdByRole: effectiveRole,
           description: finalDesc,
+          language: normalizedLanguage,
           remarks: remarks || '',
           nextFollowup: nextFollowup || '',
           reminderDateTime: parsedReminderDate,
@@ -1740,6 +1742,7 @@ router.post('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.manage', '
       createdBy: req.user._id,
       createdByRole: effectiveRole,
       description: finalDesc,
+      language: normalizedLanguage,
       remarks: remarks || '',
       nextFollowup: nextFollowup || '',
       reminderDateTime: parsedReminderDate,
@@ -1935,19 +1938,23 @@ router.put('/tasks/:id', authMiddleware, anyPermissionMiddleware(['tasks.manage'
       if (assignedTo !== undefined) task.assignedTo = assignedTo;
     }
 
-    if (language !== undefined) {
-      task.language = language;
+    const normalizedLanguage = language === undefined
+      ? undefined
+      : (['en', 'hi', 'ta'].includes(language) ? language : 'en');
+
+    if (normalizedLanguage !== undefined) {
+      task.language = normalizedLanguage;
     }
 
     if (description !== undefined) {
       let finalDesc = description;
-      if (language && !finalDesc.startsWith('[lang:')) {
-        finalDesc = `[lang:${language}] ${finalDesc.replace(/\[lang:(en|hi|ta)\]\s*/g, '').trim()}`;
+      if (normalizedLanguage) {
+        finalDesc = `[lang:${normalizedLanguage}] ${finalDesc.replace(/\[lang:(en|hi|ta)\]\s*/g, '').trim()}`.trim();
       }
       task.description = finalDesc;
-    } else if (language) {
+    } else if (normalizedLanguage) {
       const currentDesc = (task.description || '').replace(/\[lang:(en|hi|ta)\]\s*/g, '').trim();
-      task.description = `[lang:${language}] ${currentDesc}`;
+      task.description = `[lang:${normalizedLanguage}] ${currentDesc}`.trim();
     }
 
     if (remarks !== undefined) task.remarks = remarks;

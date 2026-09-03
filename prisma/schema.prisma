@@ -177,6 +177,7 @@ model Task {
   completedBy  String?
   completedAt  DateTime?
   description  String    @default("")
+  language     String    @default("en")
   remarks      String    @default("")
   nextFollowup String    @default("")
   comments     Json      @default("[]")

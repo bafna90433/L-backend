@@ -26,6 +26,14 @@ test('keeps only model fields and extracts populated relation ids', () => {
   assert.equal(data.unknown, undefined);
 });
 
+test('keeps the selected task voice language', () => {
+  const data = __testing.cleanData(__testing.specs.Task, {
+    title: 'English voice task', language: 'en', unknown: 'ignored'
+  });
+  assert.equal(data.language, 'en');
+  assert.equal(data.unknown, undefined);
+});
+
 test('uses atomic unique keys for attendance and settings upserts', () => {
   const date = new Date('2026-01-01T00:00:00.000Z');
   assert.deepEqual(__testing.uniqueWhereForUpsert('Attendance', { labourId: 'l1', date }), {
