@@ -31,6 +31,7 @@ model User {
   acknowledgedReminders Reminder[]        @relation("ReminderAcknowledger")
   assignedTasks         Task[]            @relation("TaskAssignee")
   completedTasks        Task[]            @relation("TaskCompleter")
+  requestedTaskCompletions Task[]         @relation("TaskCompletionRequester")
   sentMessages          Message[]         @relation("MessageSender")
   receivedMessages      Message[]         @relation("MessageReceiver")
   createdChatGroups     ChatGroup[]       @relation("ChatGroupCreator")
@@ -176,6 +177,8 @@ model Task {
   assignedTo   String?
   completedBy  String?
   completedAt  DateTime?
+  completionRequestedBy String?
+  completionRequestedAt DateTime?
   description  String    @default("")
   language     String    @default("en")
   remarks      String    @default("")
@@ -190,10 +193,12 @@ model Task {
 
   assignee  User? @relation("TaskAssignee", fields: [assignedTo], references: [id], onDelete: Restrict)
   completer User? @relation("TaskCompleter", fields: [completedBy], references: [id], onDelete: Restrict)
+  completionRequester User? @relation("TaskCompletionRequester", fields: [completionRequestedBy], references: [id], onDelete: Restrict)
 
   @@index([status])
   @@index([taskType])
   @@index([reminderDateTime])
+  @@index([completionRequestedAt])
 }
 
 model Message {

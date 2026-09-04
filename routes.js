@@ -1637,6 +1637,8 @@ function checkAndResetTask(task) {
     task.status = 'pending';
     task.completedBy = null;
     task.completedAt = null;
+    task.completionRequestedBy = null;
+    task.completionRequestedAt = null;
     return true;
   }
   return false;
@@ -1650,6 +1652,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
       .populate('assignedTo', 'name username imageUrl')
       .populate('createdBy', 'name username role imageUrl')
       .populate('completedBy', 'name username imageUrl')
+      .populate('completionRequestedBy', 'name username imageUrl')
       .sort({ taskType: 1, createdAt: -1 });
 
     let updated = false;
@@ -1672,6 +1675,7 @@ router.get('/tasks', authMiddleware, anyPermissionMiddleware(['tasks.view', 'wor
         .populate('assignedTo', 'name username imageUrl')
         .populate('createdBy', 'name username role imageUrl')
         .populate('completedBy', 'name username imageUrl')
+        .populate('completionRequestedBy', 'name username imageUrl')
         .sort({ taskType: 1, createdAt: -1 });
       return res.json(refreshedTasks);
     }
@@ -1773,17 +1777,125 @@ router.post('/tasks/:id/complete', authMiddleware, ownerOnlyMiddleware, async (r
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: 'Task not found' });
 
+    if (task.status === 'completed') {
+      return res.status(409).json({ message: 'Task is already completed' });
+    }
+
     task.status = 'completed';
     task.reminderAlarmArmed = false;
-    task.completedBy = req.user._id;
+    task.completedBy = task.completionRequestedBy || req.user._id;
     task.completedAt = new Date();
+    task.seenByOwner = true;
+    task.seenAt = new Date();
     await task.save();
 
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
       .populate('createdBy', 'name username role')
-      .populate('completedBy', 'name username');
+      .populate('completedBy', 'name username imageUrl')
+      .populate('completionRequestedBy', 'name username imageUrl');
     res.json(populated);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/tasks/:id/request-completion', authMiddleware, anyPermissionMiddleware(['tasks.view', 'tasks.edit', 'tasks.manage']), async (req, res) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+    if (task.status === 'completed') {
+      return res.status(409).json({ message: 'Task is already completed' });
+    }
+
+    const assignedId = String(task.assignedTo?._id || task.assignedTo?.id || task.assignedTo || '');
+    const isCreator = String(task.createdBy?._id || task.createdBy?.id || task.createdBy || '') === String(req.user._id);
+    const isAllStaff = !assignedId;
+    const isAssigned = assignedId === String(req.user._id);
+    const isOwner = req.user.role === 'owner';
+    const canManage = isOwner || req.user.permissions?.includes('*') || req.user.permissions?.includes('tasks.manage') || req.user.permissions?.includes('tasks.edit');
+
+    if (!isAssigned && !isCreator && !isAllStaff && !canManage) {
+      return res.status(403).json({ message: 'You can request completion only for work assigned to you' });
+    }
+
+    if (!task.completionRequestedAt) {
+      task.completionRequestedBy = req.user._id;
+      task.completionRequestedAt = new Date();
+      task.seenByOwner = false;
+      task.seenAt = null;
+      task.reminderAlarmArmed = false;
+      await task.save();
+    }
+
+    const populated = await Task.findById(task._id)
+      .populate('assignedTo', 'name username imageUrl')
+      .populate('createdBy', 'name username role imageUrl')
+      .populate('completedBy', 'name username imageUrl')
+      .populate('completionRequestedBy', 'name username imageUrl');
+    res.json(populated || task);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/tasks/:id/cancel-completion-request', authMiddleware, anyPermissionMiddleware(['tasks.view', 'tasks.edit', 'tasks.manage']), async (req, res) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+    if (task.status === 'completed') {
+      return res.status(409).json({ message: 'Task is already completed' });
+    }
+
+    task.completionRequestedBy = null;
+    task.completionRequestedAt = null;
+    await task.save();
+
+    const populated = await Task.findById(task._id)
+      .populate('assignedTo', 'name username imageUrl')
+      .populate('createdBy', 'name username role imageUrl')
+      .populate('completedBy', 'name username imageUrl')
+      .populate('completionRequestedBy', 'name username imageUrl');
+    res.json(populated || task);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/tasks/:id/reject-completion', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const task = await Task.findById(req.params.id);
+    if (!task) return res.status(404).json({ message: 'Task not found' });
+
+    if (task.status === 'completed') {
+      return res.status(409).json({ message: 'Task is already completed' });
+    }
+
+    const { reason } = req.body || {};
+    task.completionRequestedBy = null;
+    task.completionRequestedAt = null;
+    task.seenByOwner = true;
+    task.seenAt = new Date();
+
+    if (reason && typeof reason === 'string' && reason.trim()) {
+      task.comments = task.comments || [];
+      task.comments.push({
+        author: req.user._id,
+        authorName: req.user.name || 'Managing Director',
+        authorRole: 'owner',
+        text: `⚠️ Work sent back for revision by MD: "${reason.trim()}"`,
+        createdAt: new Date()
+      });
+    }
+
+    await task.save();
+
+    const populated = await Task.findById(task._id)
+      .populate('assignedTo', 'name username imageUrl')
+      .populate('createdBy', 'name username role imageUrl')
+      .populate('completedBy', 'name username imageUrl')
+      .populate('completionRequestedBy', 'name username imageUrl');
+    res.json(populated || task);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -1818,12 +1930,15 @@ router.post('/tasks/:id/reset', authMiddleware, ownerOnlyMiddleware, async (req,
     task.status = 'pending';
     task.completedBy = null;
     task.completedAt = null;
+    task.completionRequestedBy = null;
+    task.completionRequestedAt = null;
     await task.save();
 
     const populated = await Task.findById(task._id)
       .populate('assignedTo', 'name username')
       .populate('createdBy', 'name username role')
-      .populate('completedBy', 'name username');
+      .populate('completedBy', 'name username')
+      .populate('completionRequestedBy', 'name username imageUrl');
     res.json(populated);
   } catch (error) {
     res.status(500).json({ message: error.message });

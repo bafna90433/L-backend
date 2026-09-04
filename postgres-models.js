@@ -46,10 +46,11 @@ const specs = {
   },
   Task: {
     delegate: 'task',
-    fields: ['title', 'taskType', 'frequency', 'status', 'assignedTo', 'completedBy', 'completedAt', 'description', 'language', 'remarks', 'nextFollowup', 'comments', 'seenByOwner', 'seenAt', 'reminderDateTime', 'reminderAlarmArmed', 'reminderNote', 'createdAt'],
+    fields: ['title', 'taskType', 'frequency', 'status', 'assignedTo', 'completedBy', 'completedAt', 'completionRequestedBy', 'completionRequestedAt', 'description', 'language', 'remarks', 'nextFollowup', 'comments', 'seenByOwner', 'seenAt', 'reminderDateTime', 'reminderAlarmArmed', 'reminderNote', 'createdAt'],
     populate: {
       assignedTo: { relation: 'assignee', model: 'User' },
-      completedBy: { relation: 'completer', model: 'User' }
+      completedBy: { relation: 'completer', model: 'User' },
+      completionRequestedBy: { relation: 'completionRequester', model: 'User' }
     }
   },
   Message: {
@@ -114,7 +115,7 @@ const translateWhere = (where = {}) => {
       }
       result[key] = operators;
     } else {
-      result[key] = key.endsWith('Id') || key === 'id' || ['sender', 'receiver', 'requestedBy', 'approvedBy', 'createdBy', 'acknowledgedBy', 'assignedTo', 'completedBy'].includes(key)
+      result[key] = key.endsWith('Id') || key === 'id' || ['sender', 'receiver', 'requestedBy', 'approvedBy', 'createdBy', 'acknowledgedBy', 'assignedTo', 'completedBy', 'completionRequestedBy'].includes(key)
         ? asId(rawValue)
         : rawValue;
     }
@@ -139,7 +140,7 @@ const cleanData = (spec, input = {}, { includeId = false } = {}) => {
   for (const field of spec.fields) {
     if (source[field] === undefined) continue;
     const value = source[field];
-    data[field] = field.endsWith('Id') || ['sender', 'receiver', 'requestedBy', 'approvedBy', 'createdBy', 'acknowledgedBy', 'assignedTo', 'completedBy'].includes(field)
+    data[field] = field.endsWith('Id') || ['sender', 'receiver', 'requestedBy', 'approvedBy', 'createdBy', 'acknowledgedBy', 'assignedTo', 'completedBy', 'completionRequestedBy'].includes(field)
       ? relationValue(value)
       : value;
   }

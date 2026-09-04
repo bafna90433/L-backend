@@ -113,6 +113,8 @@ const TaskSchema = new mongoose.Schema({
   createdByRole: { type: String, enum: ['owner', 'staff'], default: 'staff' },
   completedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   completedAt: { type: Date, default: null },
+  completionRequestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  completionRequestedAt: { type: Date, default: null },
   description: { type: String, default: '' },
   language: { type: String, enum: ['en', 'hi', 'ta'], default: 'en' },
   remarks: { type: String, default: '' },
@@ -196,4 +198,3 @@ module.exports = {
   DeletedLog
 };
 }
-
