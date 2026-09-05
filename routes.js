@@ -936,8 +936,19 @@ router.get('/expenses/balance', authMiddleware, permissionMiddleware('expenses.v
         } else {
           handCashSpent += tx.amount;
         }
-        if (categoryTotals[tx.category] !== undefined) {
-          categoryTotals[tx.category] += tx.amount;
+        // Determine effective category (including legacy [Category: XYZ] if stored as miscellaneous)
+        let effectiveCategory = tx.category || 'miscellaneous';
+        if (effectiveCategory === 'miscellaneous' && tx.description) {
+          const match = tx.description.match(/\[Category:\s*([^\]]+)\]/i);
+          if (match && match[1]) {
+            effectiveCategory = match[1].trim();
+          }
+        }
+
+        if (categoryTotals[effectiveCategory] !== undefined) {
+          categoryTotals[effectiveCategory] += tx.amount;
+        } else if (effectiveCategory) {
+          categoryTotals[effectiveCategory] = (categoryTotals[effectiveCategory] || 0) + tx.amount;
         }
       }
     });
