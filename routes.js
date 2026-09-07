@@ -1035,17 +1035,60 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
       return res.status(400).json({ message: 'Invalid category for expense' });
     }
 
-    const targetStaffId = staffId || req.user._id;
+    let targetStaffId = req.user._id;
+    let taggedStaffName = '';
+
+    if (staffId && staffId !== req.user._id.toString()) {
+      const staffUser = await User.findById(staffId);
+      if (staffUser) {
+        targetStaffId = staffUser._id;
+        taggedStaffName = staffUser.name;
+      } else {
+        const labourStaff = await Labour.findById(staffId);
+        if (labourStaff) {
+          taggedStaffName = labourStaff.name;
+          const userByName = await User.findOne({ name: { $regex: new RegExp(`^${labourStaff.name.trim()}$`, 'i') } });
+          if (userByName) {
+            targetStaffId = userByName._id;
+          } else {
+            // Target staff is a Labour entry without a User login account.
+            // CashTx.staffId requires a foreign key referencing User.id, so we use authenticated user's ID
+            targetStaffId = req.user._id;
+          }
+        } else {
+          targetStaffId = req.user._id;
+        }
+      }
+    } else {
+      const currentStaffUser = await User.findById(req.user._id);
+      if (currentStaffUser) {
+        taggedStaffName = currentStaffUser.name;
+      }
+    }
+
+    let finalDescription = description || '';
+    if (taggedStaffName && !finalDescription.includes('[Staff: ')) {
+      finalDescription = finalDescription ? `${finalDescription} [Staff: ${taggedStaffName}]` : `[Staff: ${taggedStaffName}]`;
+    }
+
+    // Ensure labourId exists in Labour table if provided, otherwise set to null to avoid FK violation on CashTx_labourId_fkey
+    let validLabourId = null;
+    if (labourId) {
+      const existingLabour = await Labour.findById(labourId);
+      if (existingLabour) {
+        validLabourId = existingLabour._id;
+      }
+    }
 
     const tx = new CashTx({
       txType: 'expense',
       category,
       amount,
       date: new Date(date),
-      description: description || '',
+      description: finalDescription,
       paymentMode: paymentMode || 'handcash',
       staffId: targetStaffId,
-      labourId: labourId || null
+      labourId: validLabourId
     });
 
     await tx.save();
@@ -1092,6 +1135,31 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
       await newAdvRequest.save();
     }
 
+    // If it's a direct Labour Advance expense logged through Petty Cash, directly create approved AdvanceRequest for MD Advance Ledger
+    const isDirectAdvance = category === 'salary-advance' || 
+                            category === 'Labour Advance' || 
+                            (typeof category === 'string' && category.toLowerCase().includes('advance'));
+
+    if (isDirectAdvance && labourId) {
+      const labour = await Labour.findById(labourId);
+      if (labour && labour.empCode !== 'COMPANY' && labour.name !== 'Company Expenses') {
+        const advRequest = new AdvanceRequest({
+          labourId,
+          amount: parseFloat(amount),
+          date: new Date(date || Date.now()),
+          reason: description ? description.trim() : 'Direct advance from Petty Cash',
+          status: 'approved',
+          requestedBy: targetStaffId,
+          approvedBy: targetStaffId,
+          expenseTxId: tx._id
+        });
+        await advRequest.save();
+
+        tx.advanceRequestId = advRequest._id;
+        await tx.save();
+      }
+    }
+
     res.status(201).json(tx);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1132,6 +1200,27 @@ router.put('/expenses/:id', authMiddleware, permissionMiddleware('expenses.manag
     if (req.body.labourId !== undefined) tx.labourId = req.body.labourId || null;
 
     await tx.save();
+
+    // Synchronize linked AdvanceRequest if present
+    try {
+      let advDoc = null;
+      if (tx.advanceRequestId) {
+        advDoc = await AdvanceRequest.findById(tx.advanceRequestId);
+      } else {
+        advDoc = await AdvanceRequest.findOne({ expenseTxId: tx._id });
+      }
+
+      if (advDoc) {
+        if (amount !== undefined) advDoc.amount = Number(amount);
+        if (date !== undefined) advDoc.date = new Date(date);
+        if (req.body.labourId !== undefined) advDoc.labourId = req.body.labourId || null;
+        if (description !== undefined) advDoc.reason = description ? description.trim() : '';
+        await advDoc.save();
+      }
+    } catch (syncErr) {
+      console.warn('AdvanceRequest sync warning on expense edit:', syncErr.message);
+    }
+
     res.json({ message: 'Transaction updated successfully', transaction: tx });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -1174,6 +1263,17 @@ router.delete('/expenses/:id', authMiddleware, permissionMiddleware('expenses.ma
       await deletedRecord.save();
     } catch (auditErr) {
       console.error('Failed to write deleted log audit:', auditErr);
+    }
+
+    // Remove linked AdvanceRequest so Advance Ledger stays accurate
+    try {
+      if (tx.advanceRequestId) {
+        await AdvanceRequest.deleteOne({ _id: tx.advanceRequestId });
+      } else {
+        await AdvanceRequest.deleteOne({ expenseTxId: tx._id });
+      }
+    } catch (advDelErr) {
+      console.warn('AdvanceRequest deletion warning on expense delete:', advDelErr.message);
     }
 
     await CashTx.deleteOne({ _id: req.params.id });
