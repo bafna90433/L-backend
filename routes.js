@@ -2762,10 +2762,42 @@ router.post('/settings/:key', authMiddleware, ownerOnlyMiddleware, async (req, r
 // Expense Categories Routes
 router.get('/categories', authMiddleware, async (req, res) => {
   try {
-    const setting = await SystemSettings.findOne({ key: 'expense_categories' });
+    let setting = await SystemSettings.findOne({ key: 'expense_categories' });
     let categories = [];
-    if (setting && Array.isArray(setting.value)) {
+    if (setting && Array.isArray(setting.value) && setting.value.length > 0) {
       categories = setting.value;
+    } else {
+      // Auto seed default categories if empty in database
+      const defaultCategories = [
+        { id: 'cat_company', name: 'Company Expenses', createdAt: new Date() },
+        { id: 'cat_petrol', name: 'Petrol / Vehicle Fuel', createdAt: new Date() },
+        { id: 'cat_porter', name: 'Transport / Porter', createdAt: new Date() },
+        { id: 'cat_welfare', name: 'Staff Welfare & Tea Snacks', createdAt: new Date() },
+        { id: 'cat_advance', name: 'Labour Advance', createdAt: new Date() },
+        { id: 'cat_office', name: 'Stationery & Office Supplies', createdAt: new Date() },
+        { id: 'cat_repair', name: 'Maintenance & Repairs', createdAt: new Date() },
+        { id: 'cat_bills', name: 'Electricity & Utility Bills', createdAt: new Date() },
+        { id: 'cat_petty', name: 'General Petty Cash', createdAt: new Date() }
+      ];
+
+      try {
+        const txCats = await CashTx.distinct('category');
+        txCats.forEach(c => {
+          if (c && typeof c === 'string' && c !== 'received' && c !== 'miscellaneous') {
+            const formatted = c.replace(/[-_]/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+            if (!defaultCategories.some(d => d.name.toLowerCase() === formatted.toLowerCase())) {
+              defaultCategories.push({ id: `cat_${Date.now()}_${Math.random()}`, name: formatted, createdAt: new Date() });
+            }
+          }
+        });
+      } catch (e) {}
+
+      await SystemSettings.findOneAndUpdate(
+        { key: 'expense_categories' },
+        { $set: { value: defaultCategories, updatedAt: new Date() } },
+        { upsert: true, new: true }
+      );
+      categories = defaultCategories;
     }
     res.json(categories);
   } catch (error) {
@@ -2828,6 +2860,39 @@ router.delete('/categories/:name', authMiddleware, async (req, res) => {
     );
 
     res.json(updated.value || filtered);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Staff Credit Settings Routes (Persistent in MongoDB)
+router.get('/staff-credit-settings', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user?._id || req.user?.id;
+    const setting = await SystemSettings.findOne({ key: `staff_credit_allowed_${userId}` });
+    let allowedStaffIds = null;
+    if (setting && Array.isArray(setting.value)) {
+      allowedStaffIds = setting.value;
+    }
+    res.json({ allowedStaffIds });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/staff-credit-settings', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user?._id || req.user?.id;
+    const { allowedStaffIds } = req.body;
+    if (!Array.isArray(allowedStaffIds)) {
+      return res.status(400).json({ message: 'allowedStaffIds must be an array' });
+    }
+    const updated = await SystemSettings.findOneAndUpdate(
+      { key: `staff_credit_allowed_${userId}` },
+      { $set: { value: allowedStaffIds, updatedAt: new Date() } },
+      { upsert: true, new: true }
+    );
+    res.json({ success: true, allowedStaffIds: updated.value });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
