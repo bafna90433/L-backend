@@ -1287,7 +1287,7 @@ router.delete('/expenses/:id', authMiddleware, permissionMiddleware('expenses.ma
 router.get('/deleted-logs', authMiddleware, async (req, res) => {
   try {
     if (req.user.role !== 'owner') {
-      const access = resolveUserAccess(req.user);
+      const access = await resolveUserAccess(req.user);
       if (!access.permissions.includes('expenses.view') && !access.permissions.includes('expenses.manage')) {
         return res.status(403).json({ message: 'Forbidden: Insufficient permissions' });
       }
