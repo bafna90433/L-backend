@@ -2844,6 +2844,38 @@ router.delete('/departments/:id', authMiddleware, async (req, res) => {
   }
 });
 
+router.put('/departments/:id', authMiddleware, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: 'Department name is required' });
+    }
+    const cleanName = name.trim();
+    const existing = await Department.findOne({
+      _id: { $ne: req.params.id },
+      name: { $regex: new RegExp(`^${cleanName}$`, 'i') }
+    });
+    if (existing) {
+      return res.status(400).json({ message: 'Department with this name already exists' });
+    }
+
+    const dept = await Department.findById(req.params.id);
+    if (!dept) return res.status(404).json({ message: 'Department not found' });
+
+    const oldName = dept.name;
+    dept.name = cleanName;
+    await dept.save();
+
+    if (oldName && oldName !== cleanName) {
+      await Labour.updateMany({ department: oldName }, { department: cleanName });
+    }
+
+    res.json(dept);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // System Settings Routes
 router.get('/settings/:key', authMiddleware, async (req, res) => {
   try {
