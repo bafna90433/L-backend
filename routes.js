@@ -464,7 +464,7 @@ router.get('/owner', authMiddleware, async (req, res) => {
       owner = await User.findOne({ role: 'owner' }).select('name username _id whatsapp imageUrl');
     }
     if (!owner) return res.status(404).json({ message: 'Owner not found' });
-    
+
     const ownerObj = owner.toObject ? owner.toObject() : owner;
     if (!ownerObj.imageUrl) {
       ownerObj.imageUrl = 'https://images.unsplash.com/photo-1560250097-0b93528c311a?auto=format&fit=crop&q=80&w=200';
@@ -2691,7 +2691,7 @@ router.get('/departments', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/departments', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.post('/departments', authMiddleware, async (req, res) => {
   try {
     const { name } = req.body;
     if (!name || !name.trim()) {
@@ -2710,7 +2710,7 @@ router.post('/departments', authMiddleware, ownerOnlyMiddleware, async (req, res
   }
 });
 
-router.delete('/departments/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+router.delete('/departments/:id', authMiddleware, async (req, res) => {
   try {
     const dept = await Department.findByIdAndDelete(req.params.id);
     if (!dept) return res.status(404).json({ message: 'Department not found' });
@@ -2754,6 +2754,80 @@ router.post('/settings/:key', authMiddleware, ownerOnlyMiddleware, async (req, r
       { upsert: true, new: true }
     );
     res.json(setting);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// Expense Categories Routes
+router.get('/categories', authMiddleware, async (req, res) => {
+  try {
+    const setting = await SystemSettings.findOne({ key: 'expense_categories' });
+    let categories = [];
+    if (setting && Array.isArray(setting.value)) {
+      categories = setting.value;
+    }
+    res.json(categories);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.post('/categories', authMiddleware, async (req, res) => {
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ message: 'Category name is required' });
+    }
+    const trimmedName = name.trim();
+
+    let setting = await SystemSettings.findOne({ key: 'expense_categories' });
+    let categories = (setting && Array.isArray(setting.value)) ? setting.value : [];
+
+    const exists = categories.some(c => (typeof c === 'string' ? c : c.name).toLowerCase() === trimmedName.toLowerCase());
+    if (exists) {
+      return res.status(400).json({ message: `Category "${trimmedName}" already exists` });
+    }
+
+    const newCategoryItem = {
+      id: Date.now().toString(),
+      name: trimmedName,
+      createdAt: new Date(),
+      createdBy: req.user?.name || 'Staff'
+    };
+
+    categories.push(newCategoryItem);
+
+    const updated = await SystemSettings.findOneAndUpdate(
+      { key: 'expense_categories' },
+      { $set: { value: categories, updatedAt: new Date() } },
+      { upsert: true, new: true }
+    );
+
+    res.json(updated.value || categories);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.delete('/categories/:name', authMiddleware, async (req, res) => {
+  try {
+    const { name } = req.params;
+    let setting = await SystemSettings.findOne({ key: 'expense_categories' });
+    let categories = (setting && Array.isArray(setting.value)) ? setting.value : [];
+
+    const filtered = categories.filter(c => {
+      const catName = typeof c === 'string' ? c : c.name;
+      return catName.toLowerCase() !== decodeURIComponent(name).toLowerCase();
+    });
+
+    const updated = await SystemSettings.findOneAndUpdate(
+      { key: 'expense_categories' },
+      { $set: { value: filtered, updatedAt: new Date() } },
+      { upsert: true, new: true }
+    );
+
+    res.json(updated.value || filtered);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
