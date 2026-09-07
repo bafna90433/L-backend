@@ -1506,6 +1506,30 @@ router.post('/advances/:id/reject', authMiddleware, ownerOnlyMiddleware, async (
   }
 });
 
+router.delete('/advances/:id', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const request = await AdvanceRequest.findById(req.params.id);
+    if (!request) return res.status(404).json({ message: 'Advance request not found' });
+    await AdvanceRequest.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Advance request deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+router.delete('/advances', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try {
+    const { ids } = req.body || {};
+    if (Array.isArray(ids) && ids.length > 0) {
+      await AdvanceRequest.deleteMany({ _id: { $in: ids } });
+      return res.json({ message: `${ids.length} advance requests deleted successfully` });
+    }
+    res.status(400).json({ message: 'No valid IDs provided' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Reminder Routes
 router.post('/automation/whatsapp', authMiddleware, async (req, res) => {
   try {
