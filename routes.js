@@ -1080,6 +1080,19 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
       }
     }
 
+    const isDirectAdvance = category === 'salary-advance' ||
+                            category === 'Labour Advance' ||
+                            (typeof category === 'string' && category.toLowerCase().includes('advance'));
+
+    if (isDirectAdvance && validLabourId && taggedStaffName) {
+      const availableCredit = await getStaffAvailableCredit(taggedStaffName);
+      if (Number(amount) > availableCredit) {
+        return res.status(400).json({
+          message: `${taggedStaffName} has only ₹${Math.max(0, availableCredit).toLocaleString('en-IN')} available company credit.`
+        });
+      }
+    }
+
     const tx = new CashTx({
       txType: 'expense',
       category,
@@ -1136,10 +1149,6 @@ router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.crea
     }
 
     // If it's a direct Labour Advance expense logged through Petty Cash, directly create approved AdvanceRequest for MD Advance Ledger
-    const isDirectAdvance = category === 'salary-advance' || 
-                            category === 'Labour Advance' || 
-                            (typeof category === 'string' && category.toLowerCase().includes('advance'));
-
     if (isDirectAdvance && labourId) {
       const labour = await Labour.findById(labourId);
       if (labour && labour.empCode !== 'COMPANY' && labour.name !== 'Company Expenses') {
@@ -1304,11 +1313,56 @@ router.get('/deleted-logs', authMiddleware, async (req, res) => {
 
 
 // Advance Requests Routes
+const normalizeStaffCreditName = (name = '') => name
+  .replace(/\s*\(ID:[^)]+\)/gi, '')
+  .replace(/[.,]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+  .toLowerCase();
+
+const getTransactionCreditHolderName = (tx) => {
+  const taggedName = tx.txType !== 'received'
+    ? tx.description?.match(/\[Staff:\s*([^\]]+)\]/i)?.[1]?.trim()
+    : '';
+  if (taggedName) return taggedName;
+  if (tx.labourId && typeof tx.labourId === 'object' && tx.labourId.name) return tx.labourId.name;
+  if (tx.staffId && typeof tx.staffId === 'object' && tx.staffId.name) return tx.staffId.name;
+  return tx.labourName || tx.staffName || '';
+};
+
+const resolveStaffCreditHolder = async (holderRef) => {
+  let user = await User.findById(holderRef);
+  let labourStaff = null;
+  if (!user) labourStaff = await Labour.findById(holderRef);
+  const name = user?.name || labourStaff?.name || '';
+  if (!name) return null;
+
+  if (!user && labourStaff) {
+    user = await User.findOne({ name: { $regex: new RegExp(`^${labourStaff.name.trim()}$`, 'i') } });
+  }
+  return { user, labourStaff, name, ref: String(holderRef) };
+};
+
+const getStaffAvailableCredit = async (staffName) => {
+  const transactions = await CashTx.find()
+    .populate('staffId', 'name username')
+    .populate('labourId', 'name');
+  const targetName = normalizeStaffCreditName(staffName);
+  return transactions.reduce((balance, tx) => {
+    if (normalizeStaffCreditName(getTransactionCreditHolderName(tx)) !== targetName) return balance;
+    const amount = Number(tx.amount) || 0;
+    return balance + (tx.txType === 'received' ? amount : -amount);
+  }, 0);
+};
+
 router.post('/advances/request', authMiddleware, permissionMiddleware('advances.create'), async (req, res) => {
   try {
-    const { labourId, amount, date, reason } = req.body;
+    const { labourId, amount, date, reason, fundingStaffId } = req.body;
     if (!labourId || !amount || !date) {
       return res.status(400).json({ message: 'Labourer ID, amount, and date are required' });
+    }
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ message: 'Advance amount must be greater than zero.' });
     }
 
     // Verify labourer exists
@@ -1316,6 +1370,24 @@ router.post('/advances/request', authMiddleware, permissionMiddleware('advances.
     if (!labour) return res.status(404).json({ message: 'Labourer not found' });
 
     const isCompanyExpense = labour.empCode === 'COMPANY' || labour.name === 'Company Expenses';
+
+    let fundingHolder = null;
+    if (!isCompanyExpense) {
+      if (!fundingStaffId) {
+        return res.status(400).json({ message: 'Select the staff member whose company credit will fund this advance.' });
+      }
+      fundingHolder = await resolveStaffCreditHolder(fundingStaffId);
+      const holderIsInactive = fundingHolder?.user?.isActive === false || fundingHolder?.labourStaff?.status === 'inactive';
+      if (!fundingHolder || holderIsInactive || fundingHolder.user?.role === 'owner') {
+        return res.status(400).json({ message: 'Select a valid active staff credit holder.' });
+      }
+      const availableCredit = await getStaffAvailableCredit(fundingHolder.name);
+      if (parseFloat(amount) > availableCredit) {
+        return res.status(400).json({
+          message: `${fundingHolder.name} has only ₹${Math.max(0, availableCredit).toLocaleString('en-IN')} available company credit.`
+        });
+      }
+    }
 
     if (!isCompanyExpense) {
       // Check if there is already an outstanding approved or pending advance
@@ -1343,7 +1415,9 @@ router.post('/advances/request', authMiddleware, permissionMiddleware('advances.
       autoApproveLimit = Number(limitSetting.value);
     }
 
-    const isAutoApproved = parseFloat(amount) <= autoApproveLimit;
+    // Labour advances requested by staff must always be reviewed by the owner.
+    // The auto-approval setting is retained only for company cash requests.
+    const isAutoApproved = isCompanyExpense && parseFloat(amount) <= autoApproveLimit;
 
     const request = new AdvanceRequest({
       labourId,
@@ -1352,6 +1426,9 @@ router.post('/advances/request', authMiddleware, permissionMiddleware('advances.
       reason: reason || '',
       status: isAutoApproved ? 'approved' : 'pending',
       requestedBy: req.user._id,
+      fundingStaffId: isCompanyExpense ? undefined : fundingHolder.user?._id,
+      fundingStaffRef: isCompanyExpense ? '' : fundingHolder.ref,
+      fundingStaffName: isCompanyExpense ? '' : fundingHolder.name,
       approvedBy: isAutoApproved ? req.user._id : undefined
     });
 
@@ -1367,8 +1444,8 @@ router.post('/advances/request', authMiddleware, permissionMiddleware('advances.
         date: new Date(date || Date.now()),
         description: isCompanyExpense
           ? `Cash received for Company Expenses (Auto-Approved). Reason: ${reason || ''}`
-          : `Advance paid to ${labour.name} (Auto-Approved). Reason: ${reason || ''}`,
-        staffId: req.user._id,
+          : `Advance paid to ${labour.name} (Auto-Approved). Reason: ${reason || ''} [Staff: ${fundingHolder.name}]`,
+        staffId: isCompanyExpense ? req.user._id : (fundingHolder.user?._id || req.user._id),
         labourId: isCompanyExpense ? null : labourId,
         advanceRequestId: request._id
       });
@@ -1438,6 +1515,7 @@ router.get('/advances', authMiddleware, permissionMiddleware('advances.view'), a
     const requests = await AdvanceRequest.find(query)
       .populate('labourId', 'name whatsapp monthlySalary imageUrl')
       .populate('requestedBy', 'name username role upiId')
+      .populate('fundingStaffId', 'name username role')
       .populate('approvedBy', 'name username role')
       .sort({ date: -1 });
 
@@ -1451,7 +1529,7 @@ router.post('/advances/:id/approve', authMiddleware, ownerOnlyMiddleware, async 
   try {
     const request = await AdvanceRequest.findById(req.params.id);
     if (!request) return res.status(404).json({ message: 'Advance request not found' });
-    if (request.status !== 'pending') {
+    if (request.status !== 'pending' || request.expenseTxId) {
       return res.status(400).json({ message: 'Request has already been processed' });
     }
 
@@ -1461,6 +1539,25 @@ router.post('/advances/:id/approve', authMiddleware, ownerOnlyMiddleware, async 
     const labour = await Labour.findById(request.labourId);
     const isCompanyExpense = labour && (labour.empCode === 'COMPANY' || labour.name === 'Company Expenses');
 
+    let transactionStaffId = request.requestedBy;
+    let fundingStaffName = '';
+    const savedFundingRef = request.fundingStaffRef || request.fundingStaffId;
+    if (!isCompanyExpense && savedFundingRef) {
+      const fundingHolder = await resolveStaffCreditHolder(savedFundingRef);
+      const holderIsInactive = fundingHolder?.user?.isActive === false || fundingHolder?.labourStaff?.status === 'inactive';
+      if (!fundingHolder || holderIsInactive || fundingHolder.user?.role === 'owner') {
+        return res.status(400).json({ message: 'The selected staff credit holder is no longer active.' });
+      }
+      const availableCredit = await getStaffAvailableCredit(fundingHolder.name);
+      if (request.amount > availableCredit) {
+        return res.status(400).json({
+          message: `${fundingHolder.name} now has only ₹${Math.max(0, availableCredit).toLocaleString('en-IN')} available company credit.`
+        });
+      }
+      transactionStaffId = fundingHolder.user?._id || request.requestedBy;
+      fundingStaffName = fundingHolder.name;
+    }
+
     // Create the CashTx transaction
     const tx = new CashTx({
       txType: isCompanyExpense ? 'received' : 'expense',
@@ -1469,8 +1566,8 @@ router.post('/advances/:id/approve', authMiddleware, ownerOnlyMiddleware, async 
       date: request.date,
       description: isCompanyExpense
         ? `Cash received for Company Expenses (Approved by Owner). Reason: ${request.reason}`
-        : `Advance paid to ${labour ? labour.name : 'Labourer'} (Approved by Owner). Reason: ${request.reason}`,
-      staffId: request.requestedBy, // Logged under the staff who requested it
+        : `Advance paid to ${labour ? labour.name : 'Labourer'} (Approved by Owner). Reason: ${request.reason}${fundingStaffName ? ` [Staff: ${fundingStaffName}]` : ''}`,
+      staffId: transactionStaffId,
       labourId: isCompanyExpense ? null : request.labourId,
       paymentMode: paymentMode || 'handcash'
     });

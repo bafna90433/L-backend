@@ -48,7 +48,9 @@ function mapMongoData(source) {
     advanceRequests: source.advanceRequests.map(item => ({
       id: toId(item._id), labourId: toId(item.labourId), amount: Number(item.amount || 0), date: toDate(item.date),
       reason: item.reason || '', status: item.status || 'pending', deductedAmount: Number(item.deductedAmount || 0),
-      requestedBy: toId(item.requestedBy), approvedBy: toId(item.approvedBy), expenseTxId: toId(item.expenseTxId)
+      requestedBy: toId(item.requestedBy), fundingStaffId: toId(item.fundingStaffId),
+      fundingStaffRef: item.fundingStaffRef || '', fundingStaffName: item.fundingStaffName || '',
+      approvedBy: toId(item.approvedBy), expenseTxId: toId(item.expenseTxId)
     })),
     reminders: source.reminders.map(item => ({
       id: toId(item._id), message: item.message, targetDate: toDate(item.targetDate), status: item.status || 'pending',
@@ -94,6 +96,7 @@ function validateReferences(data) {
   data.advanceRequests.forEach(item => {
     requireRef('AdvanceRequest', item.labourId, labourIds, 'labourId');
     requireRef('AdvanceRequest', item.requestedBy, userIds, 'requestedBy');
+    requireRef('AdvanceRequest', item.fundingStaffId, userIds, 'fundingStaffId');
     requireRef('AdvanceRequest', item.approvedBy, userIds, 'approvedBy');
     requireRef('AdvanceRequest', item.expenseTxId, cashTxIds, 'expenseTxId');
   });

@@ -27,10 +27,11 @@ const specs = {
   },
   AdvanceRequest: {
     delegate: 'advanceRequest',
-    fields: ['labourId', 'amount', 'date', 'reason', 'status', 'deductedAmount', 'requestedBy', 'approvedBy', 'expenseTxId'],
+    fields: ['labourId', 'amount', 'date', 'reason', 'status', 'deductedAmount', 'requestedBy', 'fundingStaffId', 'fundingStaffRef', 'fundingStaffName', 'approvedBy', 'expenseTxId'],
     populate: {
       labourId: { relation: 'labour', model: 'Labour' },
       requestedBy: { relation: 'requester', model: 'User' },
+      fundingStaffId: { relation: 'fundingStaff', model: 'User' },
       approvedBy: { relation: 'approver', model: 'User' },
       expenseTxId: { relation: 'expenseTx', model: 'CashTx' }
     }

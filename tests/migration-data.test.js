@@ -37,6 +37,23 @@ test('checks approvedBy references before migration', () => {
   assert.throws(() => validateReferences(data), /approvedBy references missing id missing/);
 });
 
+test('preserves and validates the staff funding an advance', () => {
+  const data = mapMongoData({
+    ...emptySource(),
+    users: [{ _id: oid('u1'), username: 'staff', password: 'hash', name: 'Staff', role: 'staff' }],
+    labours: [{ _id: oid('l1'), name: 'Employee', whatsapp: '1', monthlySalary: 12000 }],
+    advanceRequests: [{
+      _id: oid('r1'), labourId: oid('l1'), amount: 500, date: new Date('2026-01-01'),
+      requestedBy: oid('u1'), fundingStaffId: oid('u1')
+    }]
+  });
+
+  assert.equal(data.advanceRequests[0].fundingStaffId, 'u1');
+  assert.doesNotThrow(() => validateReferences(data));
+  data.advanceRequests[0].fundingStaffId = 'missing';
+  assert.throws(() => validateReferences(data), /fundingStaffId references missing id missing/);
+});
+
 test('blocks missing required values before any PostgreSQL write', () => {
   const data = emptySource();
   data.users.push({ _id: 'u1', username: '', password: 'hash', name: 'Owner', role: 'owner' });

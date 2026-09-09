@@ -25,6 +25,7 @@ model User {
 
   cashTransactions      CashTx[]          @relation("CashTxStaff")
   requestedAdvances     AdvanceRequest[]  @relation("AdvanceRequester")
+  fundedAdvances        AdvanceRequest[]  @relation("AdvanceFundingStaff")
   approvedAdvances      AdvanceRequest[]  @relation("AdvanceApprover")
   createdReminders      Reminder[]        @relation("ReminderCreator")
   targetedReminders     Reminder[]        @relation("ReminderTarget")
@@ -136,16 +137,21 @@ model AdvanceRequest {
   status         String   @default("pending")
   deductedAmount Float    @default(0)
   requestedBy    String
+  fundingStaffId String?
+  fundingStaffRef String   @default("")
+  fundingStaffName String  @default("")
   approvedBy     String?
   expenseTxId    String?
 
   labour    Labour  @relation(fields: [labourId], references: [id], onDelete: Restrict)
   requester User    @relation("AdvanceRequester", fields: [requestedBy], references: [id], onDelete: Restrict)
+  fundingStaff User? @relation("AdvanceFundingStaff", fields: [fundingStaffId], references: [id], onDelete: Restrict)
   approver  User?   @relation("AdvanceApprover", fields: [approvedBy], references: [id], onDelete: Restrict)
   expenseTx CashTx? @relation(fields: [expenseTxId], references: [id], onDelete: SetNull)
 
   @@index([date])
   @@index([status])
+  @@index([fundingStaffId])
 }
 
 model Reminder {
