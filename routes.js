@@ -1316,6 +1316,7 @@ router.get('/deleted-logs', authMiddleware, async (req, res) => {
 const normalizeStaffCreditName = (name = '') => name
   .replace(/\s*\(ID:[^)]+\)/gi, '')
   .replace(/[.,]/g, ' ')
+  .replace(/\b[a-z]\b/gi, ' ')
   .replace(/\s+/g, ' ')
   .trim()
   .toLowerCase();
