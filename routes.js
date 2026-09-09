@@ -1390,21 +1390,16 @@ router.post('/advances/request', authMiddleware, permissionMiddleware('advances.
     }
 
     if (!isCompanyExpense) {
-      // Check if there is already an outstanding approved or pending advance
-      const activeAdvances = await AdvanceRequest.find({
+      // Prevent duplicate pending requests. An approved advance is already a
+      // completed payment and must not block a later, separate request.
+      const pendingRequest = await AdvanceRequest.findOne({
         labourId,
-        status: { $in: ['pending', 'approved'] }
+        status: 'pending'
       });
 
-      const outstandingAdvanceExists = activeAdvances.some(adv => {
-        if (adv.status === 'pending') return true;
-        if (adv.status === 'approved' && (adv.amount - (adv.deductedAmount || 0)) > 0) return true;
-        return false;
-      });
-
-      if (outstandingAdvanceExists) {
+      if (pendingRequest) {
         return res.status(400).json({
-          message: 'This employee already has a pending request or an active outstanding advance balance.'
+          message: 'This employee already has a pending advance request. Approve or reject it before sending another.'
         });
       }
     }
