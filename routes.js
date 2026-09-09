@@ -1027,7 +1027,13 @@ router.post('/expenses/cash-received', authMiddleware, permissionMiddleware('exp
 router.post('/expenses/log', authMiddleware, permissionMiddleware('expenses.create'), async (req, res) => {
   try {
     const { amount, date, category, description, labourId, advanceDeducted, newAdvanceGiven, paymentMode, staffId } = req.body;
-    if (!amount || !date || !category) {
+    // A salary settlement can legitimately hand over zero cash when the whole
+    // salary goes towards recovering the employee's outstanding advance.
+    const isSalaryPayment = category === 'salary-payment';
+    const hasAmount = isSalaryPayment
+      ? (amount !== undefined && amount !== null && amount !== '' && !isNaN(parseFloat(amount)))
+      : Boolean(amount);
+    if (!hasAmount || !date || !category) {
       return res.status(400).json({ message: 'Amount, date, and category are required' });
     }
 
