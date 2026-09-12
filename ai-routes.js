@@ -2,6 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const Anthropic = require('@anthropic-ai/sdk');
 const { getAiConfig, getPublicAiConfig, saveAiConfig } = require('./ai-config');
+const { buildCards } = require('./link-cards');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
@@ -86,6 +87,9 @@ async function askClaude({ question, lang, history }) {
       max_tokens: 8000,
       system: systemFor(lang),
       thinking: { type: 'adaptive' },
+      // Let Claude look things up, so prices and product names are current
+      // and every answer can cite real pages.
+      tools: [{ type: 'web_search_20260209', name: 'web_search', max_uses: 5 }],
       messages: [...history, { role: 'user', content: question }]
     });
     message = await stream.finalMessage();
@@ -102,11 +106,24 @@ async function askClaude({ question, lang, history }) {
     throw error;
   }
 
-  return message.content
+  const text = message.content
     .filter(block => block.type === 'text')
     .map(block => block.text)
     .join('\n')
     .trim();
+
+  // Pages Claude actually read during the search, for the source cards.
+  const links = [];
+  for (const block of message.content) {
+    if (block.type !== 'web_search_tool_result' || !Array.isArray(block.content)) continue;
+    for (const result of block.content) {
+      if (result?.type === 'web_search_result' && result.url) {
+        links.push({ url: result.url, title: result.title });
+      }
+    }
+  }
+
+  return { text, links };
 }
 
 /* ---------------- Gemini (Google) ---------------- */
@@ -150,22 +167,22 @@ async function askGemini({ question, lang, history }) {
     throw error;
   }
 
-  let text = (data?.candidates?.[0]?.content?.parts || [])
+  const text = (data?.candidates?.[0]?.content?.parts || [])
     .map(p => p.text || '')
     .join('')
     .trim();
 
   if (!text) throw new Error('Gemini ne khaali jawab bheja.');
+
+  // Pages Google Search grounding actually used, for the source cards.
   const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-  const sources = chunks
+  const links = chunks
     .map(chunk => chunk?.web)
-    .filter(source => source?.uri && source?.title)
+    .filter(source => source?.uri)
     .filter((source, index, all) => all.findIndex(item => item.uri === source.uri) === index)
-    .slice(0, 6);
-  if (sources.length) {
-    text += `\n\n### Sources\n${sources.map(source => `- [${source.title}](${source.uri})`).join('\n')}`;
-  }
-  return text;
+    .map(source => ({ url: source.uri, title: source.title }));
+
+  return { text, links };
 }
 
 /* ---------------- ChatGPT (OpenAI) ---------------- */
@@ -205,7 +222,7 @@ async function askOpenAI({ question, lang, history }) {
 
   const text = (data?.choices?.[0]?.message?.content || '').trim();
   if (!text) throw new Error('ChatGPT ne khaali jawab bheja.');
-  return text;
+  return { text, links: [] };
 }
 
 const PROVIDERS = { claude: askClaude, gemini: askGemini, gpt: askOpenAI };
@@ -261,12 +278,24 @@ router.post('/ask', authMiddleware, async (req, res) => {
 
   const startedAt = Date.now();
   try {
-    const text = await ask({
+    const answer = await ask({
       question: question.trim().slice(0, MAX_QUESTION),
       lang: lang === 'hinglish' ? 'hinglish' : 'en',
       history: cleanHistory(history)
     });
-    res.json({ text, model, ms: Date.now() - startedAt });
+
+    // Source cards are a bonus — never fail an answer over them.
+    let sources = [];
+    try {
+      sources = await buildCards(answer.links, {
+        cseId: process.env.GOOGLE_CSE_ID,
+        cseKey: process.env.GOOGLE_CSE_KEY || process.env.GEMINI_API_KEY
+      });
+    } catch (cardError) {
+      console.error('Link cards failed:', cardError.message);
+    }
+
+    res.json({ text: answer.text, sources, model, ms: Date.now() - startedAt });
   } catch (error) {
     console.error(`AI (${model}) failed:`, error.message);
     res.status(error.statusCode || 500).json({
