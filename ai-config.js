@@ -44,7 +44,9 @@ function maskKey(value) {
 }
 
 async function readStoredValue() {
-  const setting = await SystemSettings.findOne({ key: SETTINGS_KEY }).lean();
+  // Keep this query compatible with both Mongoose and the PostgreSQL adapter.
+  // The adapter intentionally implements the shared model API, but not Mongo-only .lean().
+  const setting = await SystemSettings.findOne({ key: SETTINGS_KEY });
   return setting?.value && typeof setting.value === 'object' ? setting.value : {};
 }
 
