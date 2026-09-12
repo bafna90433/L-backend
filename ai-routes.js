@@ -1,9 +1,10 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const Anthropic = require('@anthropic-ai/sdk');
+const { getAiConfig, getPublicAiConfig, saveAiConfig } = require('./ai-config');
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key_here';
+const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
 
 /* ------------------------------------------------------------------
    AI Council backend — one question, answers from several providers.
@@ -51,6 +52,11 @@ const authMiddleware = (req, res, next) => {
   }
 };
 
+const ownerOnlyMiddleware = (req, res, next) => {
+  if (req.auth?.role !== 'owner') return res.status(403).json({ message: 'Access denied: Owners only' });
+  next();
+};
+
 /** Trim the conversation we replay to the provider. */
 function cleanHistory(history) {
   if (!Array.isArray(history)) return [];
@@ -63,16 +69,9 @@ function cleanHistory(history) {
 
 /* ---------------- Claude (Anthropic) ---------------- */
 
-let anthropicClient = null;
-const getAnthropic = () => {
-  if (!anthropicClient) {
-    anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  }
-  return anthropicClient;
-};
-
 async function askClaude({ question, lang, history }) {
-  if (!process.env.ANTHROPIC_API_KEY) {
+  const config = (await getAiConfig()).claude;
+  if (!config.apiKey) {
     const error = new Error('Claude ki API key server par set nahi hai.');
     error.statusCode = 503;
     throw error;
@@ -80,8 +79,8 @@ async function askClaude({ question, lang, history }) {
 
   let message;
   try {
-    const stream = getAnthropic().messages.stream({
-      model: 'claude-opus-5',
+    const stream = new Anthropic({ apiKey: config.apiKey }).messages.stream({
+      model: config.model,
       max_tokens: 8000,
       system: systemFor(lang),
       thinking: { type: 'adaptive' },
@@ -111,7 +110,8 @@ async function askClaude({ question, lang, history }) {
 /* ---------------- Gemini (Google) ---------------- */
 
 async function askGemini({ question, lang, history }) {
-  const key = process.env.GEMINI_API_KEY;
+  const config = (await getAiConfig()).gemini;
+  const key = config.apiKey;
   if (!key) {
     const error = new Error('Gemini ki API key server par set nahi hai.');
     error.statusCode = 503;
@@ -126,7 +126,7 @@ async function askGemini({ question, lang, history }) {
     { role: 'user', parts: [{ text: question }] }
   ];
 
-  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
+  const model = config.model;
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
     {
@@ -159,7 +159,8 @@ async function askGemini({ question, lang, history }) {
 /* ---------------- ChatGPT (OpenAI) ---------------- */
 
 async function askOpenAI({ question, lang, history }) {
-  const key = process.env.OPENAI_API_KEY;
+  const config = (await getAiConfig()).gpt;
+  const key = config.apiKey;
   if (!key) {
     const error = new Error('ChatGPT ki API key abhi add nahi hui hai.');
     error.statusCode = 503;
@@ -173,7 +174,7 @@ async function askOpenAI({ question, lang, history }) {
       Authorization: `Bearer ${key}`
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      model: config.model,
       max_tokens: 4096,
       messages: [
         { role: 'system', content: systemFor(lang) },
@@ -201,12 +202,38 @@ const PROVIDERS = { claude: askClaude, gemini: askGemini, gpt: askOpenAI };
 
 // Which providers actually have a key on this server — the UI uses this to
 // show real answers for configured models and a clear notice for the rest.
-router.get('/status', authMiddleware, (req, res) => {
-  res.json({
-    gemini: !!process.env.GEMINI_API_KEY,
-    gpt: !!process.env.OPENAI_API_KEY,
-    claude: !!process.env.ANTHROPIC_API_KEY
-  });
+router.get('/status', authMiddleware, async (req, res) => {
+  try {
+    const config = await getAiConfig();
+    res.json({ gemini: !!config.gemini.apiKey, gpt: !!config.gpt.apiKey, claude: !!config.claude.apiKey });
+  } catch (error) {
+    res.status(500).json({ message: 'AI configuration could not be loaded.' });
+  }
+});
+
+router.get('/config', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try { res.json(await getPublicAiConfig()); }
+  catch (error) { res.status(500).json({ message: 'AI configuration could not be loaded.' }); }
+});
+
+router.put('/config', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  try { res.json(await saveAiConfig(req.body)); }
+  catch (error) {
+    console.error('AI configuration save failed:', error.message);
+    res.status(500).json({ message: 'AI configuration could not be saved.' });
+  }
+});
+
+router.post('/test/:provider', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
+  const ask = PROVIDERS[req.params.provider];
+  if (!ask) return res.status(400).json({ message: 'Unknown AI provider.' });
+  const startedAt = Date.now();
+  try {
+    await ask({ question: 'Reply with only: Connection successful', lang: 'en', history: [] });
+    res.json({ ok: true, ms: Date.now() - startedAt });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message || 'Connection test failed.' });
+  }
 });
 
 router.post('/ask', authMiddleware, async (req, res) => {

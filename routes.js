@@ -2979,6 +2979,9 @@ router.put('/departments/:id', authMiddleware, async (req, res) => {
 router.get('/settings/:key', authMiddleware, async (req, res) => {
   try {
     const { key } = req.params;
+    if (key === 'ai_council_secure_config') {
+      return res.status(404).json({ message: `Setting with key ${key} not found` });
+    }
     let setting = await SystemSettings.findOne({ key });
     if (!setting) {
       // Return default values for known keys
@@ -2999,6 +3002,9 @@ router.get('/settings/:key', authMiddleware, async (req, res) => {
 router.post('/settings/:key', authMiddleware, ownerOnlyMiddleware, async (req, res) => {
   try {
     const { key } = req.params;
+    if (key === 'ai_council_secure_config') {
+      return res.status(400).json({ message: 'Use the dedicated AI configuration endpoint.' });
+    }
     const { value } = req.body;
     if (value === undefined) {
       return res.status(400).json({ message: 'Value is required' });
