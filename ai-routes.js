@@ -24,14 +24,16 @@ const SYSTEM_EN =
   'You are an assistant for the managing director of a small Indian business. ' +
   'Answer in clear, plain English. Be concise and practical — short paragraphs or ' +
   'numbered points, no filler. If the question is about money, contracts or law in ' +
-  'India, say plainly when a professional should be consulted.';
+  'India, say plainly when a professional should be consulted. Format longer answers with clean Markdown headings, ' +
+  'short paragraphs, bullet lists and tables where useful. Never show raw formatting instructions.';
 
 const SYSTEM_HINGLISH =
   'You are an assistant for the managing director of a small Indian business. ' +
   'Answer in Hinglish — Hindi written in the Roman alphabet, mixed naturally with ' +
   'English business words (for example: "Pehle supplier se rate confirm karein, phir ' +
   'order place karein"). Do not use Devanagari script. Be concise and practical — ' +
-  'short paragraphs or numbered points, no filler.';
+  'short paragraphs or numbered points, no filler. Format longer answers with clean Markdown headings, ' +
+  'short paragraphs, bullet lists and tables where useful.';
 
 const systemFor = lang => (lang === 'hinglish' ? SYSTEM_HINGLISH : SYSTEM_EN);
 
@@ -134,6 +136,7 @@ async function askGemini({ question, lang, history }) {
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
       body: JSON.stringify({
         contents,
+        tools: [{ google_search: {} }],
         systemInstruction: { parts: [{ text: systemFor(lang) }] },
         generationConfig: { maxOutputTokens: 4096 }
       })
@@ -147,12 +150,21 @@ async function askGemini({ question, lang, history }) {
     throw error;
   }
 
-  const text = (data?.candidates?.[0]?.content?.parts || [])
+  let text = (data?.candidates?.[0]?.content?.parts || [])
     .map(p => p.text || '')
     .join('')
     .trim();
 
   if (!text) throw new Error('Gemini ne khaali jawab bheja.');
+  const chunks = data?.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  const sources = chunks
+    .map(chunk => chunk?.web)
+    .filter(source => source?.uri && source?.title)
+    .filter((source, index, all) => all.findIndex(item => item.uri === source.uri) === index)
+    .slice(0, 6);
+  if (sources.length) {
+    text += `\n\n### Sources\n${sources.map(source => `- [${source.title}](${source.uri})`).join('\n')}`;
+  }
   return text;
 }
 
