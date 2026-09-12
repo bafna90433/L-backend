@@ -2,6 +2,8 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const ImageKit = require('imagekit');
 const { getAiConfig } = require('./ai-config');
+const { User } = require('./models');
+const { resolveUserAccess } = require('./access-control');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
@@ -65,6 +67,29 @@ function referenceParts(references) {
     .map(ref => ({ inlineData: { mimeType: ref.mimeType, data: ref.data } }));
 }
 
+/** Only users MD gave Image Studio access to (owners always allowed). */
+const studioAccessMiddleware = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.auth.id);
+    if (!user) return res.status(401).json({ message: 'User nahi mila.' });
+
+    const access = await resolveUserAccess(user);
+    const permissions = access.permissions || [];
+    const allowed =
+      user.role === 'owner' ||
+      user.role === 'ai' ||
+      permissions.includes('*') ||
+      permissions.includes('ai.studio');
+
+    if (access.isActive === false || !allowed) {
+      return res.status(403).json({ message: 'Image Studio ka access nahi hai. MD se permission lagwa lijiye.' });
+    }
+    next();
+  } catch (error) {
+    res.status(500).json({ message: 'Access check nahi ho paaya.' });
+  }
+};
+
 router.get('/status', authMiddleware, async (req, res) => {
   try {
     const config = await getAiConfig();
@@ -74,7 +99,7 @@ router.get('/status', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/generate', authMiddleware, async (req, res) => {
+router.post('/generate', authMiddleware, studioAccessMiddleware, async (req, res) => {
   const { prompt, model, aspect, references } = req.body || {};
 
   if (typeof prompt !== 'string' || !prompt.trim()) {

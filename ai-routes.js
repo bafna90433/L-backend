@@ -3,6 +3,9 @@ const jwt = require('jsonwebtoken');
 const Anthropic = require('@anthropic-ai/sdk');
 const { getAiConfig, getPublicAiConfig, saveAiConfig } = require('./ai-config');
 const { buildCards } = require('./link-cards');
+const bcrypt = require('bcryptjs');
+const { User } = require('./models');
+const { resolveUserAccess } = require('./access-control');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
@@ -52,6 +55,21 @@ const authMiddleware = (req, res, next) => {
     next();
   } catch (error) {
     return res.status(401).json({ message: 'Invalid token' });
+  }
+};
+
+/** Gate a route on one AI permission — the same ones MD assigns from Access Control. */
+const aiPermissionMiddleware = feature => async (req, res, next) => {
+  try {
+    const user = await User.findById(req.auth.id);
+    if (!user) return res.status(401).json({ message: 'User nahi mila.' });
+    const access = await aiAccessFor(user);
+    if (!access.isActive || !access[feature]) {
+      return res.status(403).json({ message: 'Is feature ka access nahi hai. MD se permission lagwa lijiye.' });
+    }
+    next();
+  } catch (error) {
+    res.status(500).json({ message: 'Access check nahi ho paaya.' });
   }
 };
 
@@ -265,7 +283,7 @@ router.post('/test/:provider', authMiddleware, ownerOnlyMiddleware, async (req, 
   }
 });
 
-router.post('/ask', authMiddleware, async (req, res) => {
+router.post('/ask', authMiddleware, aiPermissionMiddleware('council'), async (req, res) => {
   const { model, question, lang, history } = req.body || {};
 
   const ask = PROVIDERS[model];
@@ -302,6 +320,125 @@ router.post('/ask', authMiddleware, async (req, res) => {
       message: error.message || 'AI request failed.',
       model
     });
+  }
+});
+
+/** What this user may open in the AI workspace. */
+async function aiAccessFor(user) {
+  const access = await resolveUserAccess(user);
+  const permissions = access.permissions || [];
+  const everything = user.role === 'owner' || permissions.includes('*');
+
+  return {
+    isActive: access.isActive !== false,
+    roleName: access.roleName,
+    // role 'ai' accounts exist only for the AI workspace, so they get both.
+    council: everything || user.role === 'ai' || permissions.includes('ai.council'),
+    studio: everything || user.role === 'ai' || permissions.includes('ai.studio')
+  };
+}
+
+/* ---------------- Separate login for the AI workspace ----------------
+   AI-only users (role 'ai') sign in here instead of the owner dashboard,
+   so the design work does not need the MD's credentials. Owners can use
+   the same login too. The token it issues is the normal app token, so
+   every /api/ai/* and /api/image/* route accepts it.
+   ------------------------------------------------------------------- */
+
+router.post('/auth/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username aur password dono zaroori hain.' });
+    }
+
+    const user = await User.findOne({ username: String(username).trim() });
+    if (!user || !(await bcrypt.compare(String(password), user.password))) {
+      return res.status(401).json({ message: 'Username ya password galat hai.' });
+    }
+
+    const access = await aiAccessFor(user);
+
+    if (!access.isActive) {
+      return res.status(403).json({ message: 'Ye account band hai. MD se baat kijiye.' });
+    }
+    if (!access.council && !access.studio) {
+      return res.status(403).json({
+        message: 'Is account ko AI workspace ka access nahi hai. MD se "AI Studio" role lagwa lijiye.'
+      });
+    }
+
+    const token = jwt.sign({ id: user._id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+
+    res.json({
+      token,
+      user: {
+        id: user._id,
+        username: user.username,
+        name: user.name,
+        role: user.role,
+        roleName: access.roleName,
+        imageUrl: user.imageUrl || '',
+        canCouncil: access.council,
+        canStudio: access.studio
+      }
+    });
+  } catch (error) {
+    console.error('AI login failed:', error.message);
+    res.status(500).json({ message: 'Login nahi ho paaya.' });
+  }
+});
+
+/** Change your own password from inside the AI workspace. */
+router.post('/auth/password', authMiddleware, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Purana aur naya password dono chahiye.' });
+    }
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ message: 'Naya password kam se kam 6 characters ka rakhein.' });
+    }
+
+    const user = await User.findById(req.auth.id);
+    if (!user) return res.status(404).json({ message: 'User nahi mila.' });
+
+    if (!(await bcrypt.compare(String(currentPassword), user.password))) {
+      return res.status(401).json({ message: 'Purana password galat hai.' });
+    }
+
+    user.password = await bcrypt.hash(String(newPassword), 10);
+    await user.save();
+    res.json({ message: 'Password badal gaya.' });
+  } catch (error) {
+    console.error('Password change failed:', error.message);
+    res.status(500).json({ message: 'Password nahi badla ja saka.' });
+  }
+});
+
+router.get('/auth/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.auth.id).select('-password');
+    if (!user) return res.status(401).json({ message: 'User nahi mila.' });
+    const access = await aiAccessFor(user);
+    if (!access.isActive || (!access.council && !access.studio)) {
+      return res.status(403).json({ message: 'Is account ko AI workspace ka access nahi hai.' });
+    }
+
+    res.json({
+      user: {
+        id: user._id,
+        username: user.username,
+        name: user.name,
+        role: user.role,
+        roleName: access.roleName,
+        imageUrl: user.imageUrl || '',
+        canCouncil: access.council,
+        canStudio: access.studio
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'User load nahi hua.' });
   }
 });
 

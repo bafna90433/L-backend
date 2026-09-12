@@ -30,6 +30,10 @@ const PERMISSION_GROUPS = [
     { key: 'tasks.delete', label: 'Delete staff work items' },
     { key: 'chat.use', label: 'Use team chat' }
   ] },
+  { group: 'AI workspace', permissions: [
+    { key: 'ai.studio', label: 'Use Image Studio (AI image generation)' },
+    { key: 'ai.council', label: 'Use AI Council (ask Gemini / ChatGPT / Claude)' }
+  ] },
   { group: 'Management', permissions: [
     { key: 'salary.view', label: 'View salary' },
     { key: 'settings.manage', label: 'Manage system settings' },
@@ -49,7 +53,8 @@ const DEFAULT_STAFF_PERMISSIONS = [
 const DEFAULT_ROLES = [
   { name: 'MD / Owner', slug: 'owner', description: 'Full system control', permissions: ['*'], isSystem: true },
   { name: 'Office Staff', slug: 'staff', description: 'Standard office operations', permissions: DEFAULT_STAFF_PERMISSIONS, isSystem: true },
-  { name: 'Office Staff 2', slug: 'staff2', description: 'Existing second staff access', permissions: DEFAULT_STAFF_PERMISSIONS, isSystem: true }
+  { name: 'Office Staff 2', slug: 'staff2', description: 'Existing second staff access', permissions: DEFAULT_STAFF_PERMISSIONS, isSystem: true },
+  { name: 'AI Studio', slug: 'ai-studio', description: 'AI workspace only — Image Studio and AI Council, no office modules', permissions: ['ai.studio', 'ai.council'], isSystem: true }
 ];
 
 const providerIsPostgres = () => (process.env.DATABASE_PROVIDER || 'mongodb').toLowerCase() === 'postgresql';
