@@ -5,6 +5,7 @@ const path = require('path');
 const { connectDatabase } = require('./database');
 const apiRoutes = require('./routes');
 const aiRoutes = require('./ai-routes');
+const imageRoutes = require('./image-routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -18,6 +19,10 @@ app.use(cors({
 }));
 
 // Parse JSON and URL-encoded bodies
+// Reference images make these requests large, so this route parses its own
+// body with a higher cap — it must be mounted before the global parser.
+app.use('/api/image', express.json({ limit: '40mb' }), imageRoutes);
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
