@@ -6,6 +6,7 @@ const { connectDatabase } = require('./database');
 const apiRoutes = require('./routes');
 const aiRoutes = require('./ai-routes');
 const imageRoutes = require('./image-routes');
+const announceRoutes = require('./announce-routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -27,6 +28,7 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // API Routes
+app.use('/api/announce', announceRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api', apiRoutes);
 

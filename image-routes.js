@@ -31,7 +31,9 @@ const MODELS = {
   'flash-lite': 'gemini-3.1-flash-lite-image'
 };
 
-const ASPECTS = ['1:1', '4:3', '3:4', '16:9', '9:16'];
+const ASPECTS = ['original', '1:1', '4:3', '3:4', '16:9', '9:16'];
+// Bigger output = sharper edges and finer detail, at a higher cost per image.
+const SIZES = ['1K', '2K', '4K'];
 
 const MAX_PROMPT = 6000;
 const MAX_REFERENCES = 4;
@@ -100,7 +102,7 @@ router.get('/status', authMiddleware, async (req, res) => {
 });
 
 router.post('/generate', authMiddleware, studioAccessMiddleware, async (req, res) => {
-  const { prompt, model, aspect, references } = req.body || {};
+  const { prompt, model, aspect, size, references } = req.body || {};
 
   if (typeof prompt !== 'string' || !prompt.trim()) {
     return res.status(400).json({ message: 'Prompt is required.' });
@@ -108,6 +110,7 @@ router.post('/generate', authMiddleware, studioAccessMiddleware, async (req, res
 
   const modelId = MODELS[model] || MODELS.pro;
   const aspectRatio = ASPECTS.includes(aspect) ? aspect : '1:1';
+  const imageSize = SIZES.includes(size) ? size : '2K';
 
   let apiKey;
   try {
@@ -136,7 +139,12 @@ router.post('/generate', authMiddleware, studioAccessMiddleware, async (req, res
           ],
           generationConfig: {
             responseModalities: ['TEXT', 'IMAGE'],
-            imageConfig: { aspectRatio }
+            imageConfig: {
+              // 'original' means: say nothing about framing, so the reference
+              // image's own shape and composition survive untouched.
+              ...(aspectRatio === 'original' ? {} : { aspectRatio }),
+              imageSize
+            }
           }
         })
       }
@@ -190,11 +198,46 @@ router.post('/generate', authMiddleware, studioAccessMiddleware, async (req, res
       note,
       model: modelId,
       aspect: aspectRatio,
+      size: imageSize,
       ms: Date.now() - startedAt
     });
   } catch (error) {
     console.error('Image generation failed:', error.message);
     res.status(500).json({ message: error.message || 'Image generation failed.' });
+  }
+});
+
+/**
+ * Store an image the browser produced.
+ *
+ * The Packet Maker pastes the real toy photograph onto the generated card in a
+ * canvas, so the finished pack is uploaded from the client instead of being
+ * generated here. Same ImageKit folder, same permanent URLs.
+ */
+router.post('/store', authMiddleware, studioAccessMiddleware, async (req, res) => {
+  const { data, mimeType } = req.body || {};
+
+  if (typeof data !== 'string' || !data) {
+    return res.status(400).json({ message: 'Image data is required.' });
+  }
+
+  const buffer = Buffer.from(data, 'base64');
+  if (!buffer.length || buffer.length > 25 * 1024 * 1024) {
+    return res.status(400).json({ message: 'Image is empty or too large.' });
+  }
+
+  try {
+    const extension = String(mimeType || '').includes('png') ? 'png' : 'jpg';
+    const upload = await imagekit.upload({
+      file: buffer,
+      fileName: `ai-studio-${Date.now()}.${extension}`,
+      folder: '/ai-studio',
+      useUniqueFileName: true
+    });
+    res.json({ url: upload.url, stored: true, bytes: buffer.length });
+  } catch (error) {
+    console.error('ImageKit upload failed:', error.message);
+    res.status(500).json({ message: 'Image save nahi ho paayi.' });
   }
 });
 
