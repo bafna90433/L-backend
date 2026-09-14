@@ -218,11 +218,9 @@ router.put('/ringtones', authMiddleware, ownerOnly, async (req, res) => {
 
 /* ---------- spoken announcements ---------- */
 
-/** Male neural voices, one per language the office uses. */
+/** Announcement Bell intentionally uses one consistent office voice. */
 const VOICES = {
-  en: 'en-IN-PrabhatNeural',
-  hi: 'hi-IN-MadhurNeural',
-  ta: 'ta-IN-ValluvarNeural'
+  en: 'en-IN-PrabhatNeural'
 };
 
 const LANGS = Object.keys(VOICES);
