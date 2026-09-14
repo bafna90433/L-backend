@@ -24,12 +24,14 @@ app.use(cors({
 // body with a higher cap — it must be mounted before the global parser.
 app.use('/api/image', express.json({ limit: '40mb' }), imageRoutes);
 
+// The AI Council accepts photos to analyse, so it needs the same headroom.
+app.use('/api/ai', express.json({ limit: '30mb' }), aiRoutes);
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // API Routes
 app.use('/api/announce', announceRoutes);
-app.use('/api/ai', aiRoutes);
 app.use('/api', apiRoutes);
 
 // Simple status endpoint

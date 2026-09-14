@@ -59,6 +59,9 @@ async function getAiConfig() {
     return [provider, {
       apiKey,
       model: String(stored?.[provider]?.model || defaults.model).trim(),
+      workspaceId: provider === 'claude'
+        ? String(stored?.[provider]?.workspaceId || process.env.ANTHROPIC_WORKSPACE_ID || '').trim()
+        : '',
       source: savedKey ? 'settings' : (envKey ? 'environment' : null)
     }];
   }));
@@ -71,6 +74,7 @@ async function getPublicAiConfig() {
       configured: Boolean(value.apiKey),
       maskedKey: maskKey(value.apiKey),
       model: value.model,
+      workspaceId: value.workspaceId || '',
       source: value.source
     }]))
   };
@@ -90,6 +94,9 @@ async function saveAiConfig(input = {}) {
     }
     if (typeof submitted.model === 'string') {
       next[provider].model = submitted.model.trim() || defaults.model;
+    }
+    if (provider === 'claude' && typeof submitted.workspaceId === 'string') {
+      next[provider].workspaceId = submitted.workspaceId.trim();
     }
   }
   await SystemSettings.findOneAndUpdate(
