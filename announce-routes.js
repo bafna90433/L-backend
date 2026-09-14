@@ -229,25 +229,112 @@ const LANGS = Object.keys(VOICES);
 const speechCache = new Map();
 const SPEECH_CACHE_MAX = 120;
 
-const speak = async (text, lang) => {
-  const key = `${lang}|${text}`;
-  const hit = speechCache.get(key);
-  if (hit) return hit;
+/** How long one voice attempt gets before it is abandoned. */
+const SYNTH_TIMEOUT_MS = 12000;
 
-  const tts = new MsEdgeTTS();
-  await tts.setMetadata(VOICES[lang] || VOICES.en, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-  const { audioStream } = tts.toStream(text);
+/**
+ * One attempt at Microsoft's neural voice.
+ *
+ * The stream can also just stop — no 'end', no 'error' — so this refuses to
+ * wait forever. Without the timeout a single bad connection hangs the request
+ * and the announcement is never spoken at all.
+ */
+const synthOnce = (text, lang) =>
+  new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
 
-  const chunks = [];
-  await new Promise((resolve, reject) => {
-    audioStream.on('data', chunk => chunks.push(chunk));
-    audioStream.on('end', resolve);
-    audioStream.on('error', reject);
+    const timer = setTimeout(
+      () => finish(reject, new Error('voice service did not answer in time')),
+      SYNTH_TIMEOUT_MS
+    );
+
+    (async () => {
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(VOICES[lang] || VOICES.en, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      const { audioStream } = tts.toStream(text);
+
+      const chunks = [];
+      audioStream.on('data', chunk => chunks.push(chunk));
+      audioStream.on('end', () => {
+        const audio = Buffer.concat(chunks);
+        if (audio.length < 2000) finish(reject, new Error('empty audio'));
+        else finish(resolve, audio.toString('base64'));
+      });
+      audioStream.on('error', error => finish(reject, error));
+    })().catch(error => finish(reject, error));
   });
 
-  const audio = Buffer.concat(chunks).toString('base64');
+/**
+ * Google's voice, used only when Microsoft's keeps failing. It is capped at a
+ * couple of hundred characters, which is fine for an announcement line.
+ */
+const synthFallback = async (text, lang) => {
+  const res = await fetch(
+    `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text.slice(0, 200))}` +
+      `&tl=${lang}&client=tw-ob`,
+    {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    }
+  );
+  if (!res.ok) throw new Error(`fallback voice failed (${res.status})`);
+  const audio = Buffer.from(await res.arrayBuffer());
+  if (audio.length < 1000) throw new Error('fallback voice returned nothing');
+  return audio.toString('base64');
+};
+
+/**
+ * The neural voice service drops its stream every few calls, which is why
+ * announcements used to be silent at random. Try it twice, then fall back to a
+ * second voice, and remember whatever worked.
+ */
+const speak = (text, lang) => {
+  const key = `${lang}|${text}`;
+  const hit = speechCache.get(key);
+  // A finished recording, or one already being made. Storing the promise means
+  // the pre-warm and the staff browser share one synthesis instead of racing.
+  if (hit) return hit;
+
+  const work = buildSpeech(text, lang).catch(error => {
+    // A failure must not be remembered, or it would never be retried.
+    speechCache.delete(key);
+    throw error;
+  });
+
   if (speechCache.size >= SPEECH_CACHE_MAX) speechCache.delete(speechCache.keys().next().value);
-  speechCache.set(key, audio);
+  speechCache.set(key, work);
+  return work;
+};
+
+const buildSpeech = async (text, lang) => {
+  let audio = null;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 2 && !audio; attempt++) {
+    try {
+      audio = await synthOnce(text, lang);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (!audio) {
+    try {
+      audio = await synthFallback(text, lang);
+      console.warn('Announcement voice fell back to the backup:', lastError?.message);
+    } catch (error) {
+      throw lastError || error;
+    }
+  }
+
   return audio;
 };
 
@@ -388,6 +475,30 @@ router.post('/ring', authMiddleware, ownerOnly, async (req, res) => {
 
     const log = await readSetting(LOG_KEY, []);
     await writeSetting(LOG_KEY, [entry, ...(Array.isArray(log) ? log : [])].slice(0, LOG_LIMIT));
+
+    // Build the voice now and push it down the same stream the moment it is
+    // ready. The alert and the tone land immediately; the spoken line follows a
+    // few seconds later without the browser having to ask for it.
+    if (announcing) {
+      for (const target of targets) {
+        const person = staff.find(p => String(p._id) === target.userId);
+        if (!person) continue;
+
+        const spoken = `${person.name}, ${line}`;
+        speak(spoken, speechLang)
+          .then(audioContent => {
+            pushTo(target.userId, 'speech', {
+              ringId,
+              audioContent,
+              mimeType: 'audio/mp3'
+            });
+          })
+          .catch(error => {
+            // The browser can still ask for it itself; this is just the fast path.
+            console.warn(`Could not build the announcement for ${person.name}:`, error.message);
+          });
+      }
+    }
 
     res.json({
       ringId,
