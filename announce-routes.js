@@ -2,6 +2,8 @@ const express = require('express');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { User, SystemSettings } = require('./models');
+const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
+const { getAiConfig } = require('./ai-config');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
@@ -15,29 +17,34 @@ const JWT_SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key
 
      POST /api/announce/ticket    -> short-lived ticket for the stream
      GET  /api/announce/stream    -> the SSE connection (ticket in query)
-     GET  /api/announce/ringtones -> tone catalogue + per-staff choice
-     PUT  /api/announce/ringtones -> MD saves who gets which tone
-     POST /api/announce/ring      -> MD rings the selected staff
-     POST /api/announce/ack       -> staff says "sun liya"
+     GET  /api/announce/ringtones -> tone catalogue + the office ringtone
+     PUT  /api/announce/ringtones -> MD picks the office ringtone
+     POST /api/announce/ring      -> MD rings or announces to selected staff
+     POST /api/announce/speech    -> the spoken line for an announcement
+     POST /api/announce/polish    -> Gemini tidies the MD's wording
+     POST /api/announce/ack       -> staff acknowledges the ring
      GET  /api/announce/status    -> who is online + recent rings
    ------------------------------------------------------------------ */
 
 /** Built-in tones. The browser synthesises these, so nothing has to download. */
 const TONES = [
-  { id: 'chime',    name: 'Office Chime',     hint: 'Soft two-note chime' },
-  { id: 'bell',     name: 'Brass Bell',       hint: 'Classic reception bell' },
-  { id: 'ping',     name: 'Sharp Ping',       hint: 'Short and bright' },
-  { id: 'alert',    name: 'Alert Pulse',      hint: 'Repeating urgent beeps' },
-  { id: 'arcade',   name: 'Rising Arcade',    hint: 'Playful upward run' },
-  { id: 'digital',  name: 'Digital Ring',     hint: 'Telephone style ring' },
-  { id: 'marimba',  name: 'Marimba',          hint: 'Warm wooden notes' },
-  { id: 'siren',    name: 'Soft Siren',       hint: 'Slow rise and fall' }
+  { id: 'telephone', name: 'Telephone Ring',  hint: 'Classic kring-kring, rings until answered' },
+  { id: 'siren',   name: 'Emergency Siren', hint: 'Loud rising and falling siren' },
+  { id: 'wail',    name: 'Two-Tone Wail',   hint: 'Ambulance style two-tone' },
+  { id: 'klaxon',  name: 'Klaxon Horn',     hint: 'Deep factory horn' },
+  { id: 'alert',   name: 'Alert Pulse',     hint: 'Fast urgent beeps' },
+  { id: 'digital', name: 'Digital Ring',    hint: 'Telephone style ring' },
+  { id: 'bell',    name: 'School Bell',     hint: 'Loud metallic bell' },
+  { id: 'ping',    name: 'Sharp Ping',      hint: 'Short and bright' },
+  { id: 'arcade',  name: 'Rising Arcade',   hint: 'Playful upward run' },
+  { id: 'marimba', name: 'Marimba',         hint: 'Warm wooden notes' },
+  { id: 'chime',   name: 'Office Chime',    hint: 'Soft two-note chime' }
 ];
 
 const TONE_IDS = TONES.map(t => t.id);
-const DEFAULT_TONE = 'chime';
+const DEFAULT_TONE = 'telephone';
 
-const RINGTONE_KEY = 'announce.ringtones';
+const RINGTONE_KEY = 'announce.ringtone';
 const LOG_KEY = 'announce.log';
 const LOG_LIMIT = 60;
 
@@ -168,15 +175,19 @@ router.get('/stream', async (req, res) => {
 
 /* ---------- ringtone assignment ---------- */
 
+const readRingtone = async () => {
+  const saved = await readSetting(RINGTONE_KEY, null);
+  if (!saved || typeof saved !== 'object') return { tone: DEFAULT_TONE, customUrl: '', customName: '' };
+  return {
+    tone: saved.tone || DEFAULT_TONE,
+    customUrl: saved.customUrl || '',
+    customName: saved.customName || ''
+  };
+};
+
 router.get('/ringtones', authMiddleware, async (req, res) => {
   try {
-    const assigned = await readSetting(RINGTONE_KEY, {});
-    // Staff only need their own tone; the MD needs the whole map.
-    if (req.user.role !== 'owner') {
-      const mine = assigned[String(req.user._id)] || { tone: DEFAULT_TONE };
-      return res.json({ tones: TONES, mine });
-    }
-    res.json({ tones: TONES, assigned, defaultTone: DEFAULT_TONE });
+    res.json({ tones: TONES, ringtone: await readRingtone(), defaultTone: DEFAULT_TONE });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -184,25 +195,128 @@ router.get('/ringtones', authMiddleware, async (req, res) => {
 
 router.put('/ringtones', authMiddleware, ownerOnly, async (req, res) => {
   try {
-    const { userId, tone, customUrl, customName } = req.body || {};
-    if (!userId) return res.status(400).json({ message: 'userId is required' });
+    const { tone, customUrl, customName } = req.body || {};
     if (tone && !TONE_IDS.includes(tone) && tone !== 'custom') {
       return res.status(400).json({ message: 'Unknown tone' });
     }
     if (tone === 'custom' && !customUrl) {
-      return res.status(400).json({ message: 'Custom tone needs an audio file' });
+      return res.status(400).json({ message: 'A custom tone needs an audio file' });
     }
 
-    const assigned = await readSetting(RINGTONE_KEY, {});
-    const next = { ...assigned };
-    next[String(userId)] = {
+    const ringtone = {
       tone: tone || DEFAULT_TONE,
       customUrl: tone === 'custom' ? String(customUrl) : '',
       customName: tone === 'custom' ? String(customName || 'Custom tone') : ''
     };
 
-    await writeSetting(RINGTONE_KEY, next);
-    res.json({ assigned: next });
+    await writeSetting(RINGTONE_KEY, ringtone);
+    res.json({ ringtone });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+/* ---------- spoken announcements ---------- */
+
+/** Male neural voices, one per language the office uses. */
+const VOICES = {
+  en: 'en-IN-PrabhatNeural',
+  hi: 'hi-IN-MadhurNeural',
+  ta: 'ta-IN-ValluvarNeural'
+};
+
+const LANGS = Object.keys(VOICES);
+
+/** The same line gets announced over and over, so keep the audio around. */
+const speechCache = new Map();
+const SPEECH_CACHE_MAX = 120;
+
+const speak = async (text, lang) => {
+  const key = `${lang}|${text}`;
+  const hit = speechCache.get(key);
+  if (hit) return hit;
+
+  const tts = new MsEdgeTTS();
+  await tts.setMetadata(VOICES[lang] || VOICES.en, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+  const { audioStream } = tts.toStream(text);
+
+  const chunks = [];
+  await new Promise((resolve, reject) => {
+    audioStream.on('data', chunk => chunks.push(chunk));
+    audioStream.on('end', resolve);
+    audioStream.on('error', reject);
+  });
+
+  const audio = Buffer.concat(chunks).toString('base64');
+  if (speechCache.size >= SPEECH_CACHE_MAX) speechCache.delete(speechCache.keys().next().value);
+  speechCache.set(key, audio);
+  return audio;
+};
+
+router.post('/speech', authMiddleware, async (req, res) => {
+  try {
+    const text = String(req.body?.text || '').slice(0, 400).trim();
+    const lang = LANGS.includes(req.body?.lang) ? req.body.lang : 'en';
+    if (!text) return res.status(400).json({ message: 'Nothing to say' });
+
+    const audioContent = await speak(text, lang);
+    res.json({ audioContent, mimeType: 'audio/mp3' });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
+/* ---------- wording help ---------- */
+
+/**
+ * Tidy the MD's rough note into one clean announcement line.
+ *
+ * This uses the Gemini key the MD saved in Settings, not an environment
+ * variable, so it works on the live server without any extra setup.
+ */
+router.post('/polish', authMiddleware, ownerOnly, async (req, res) => {
+  try {
+    const draft = String(req.body?.text || '').slice(0, 300).trim();
+    if (!draft) return res.status(400).json({ message: 'Nothing to improve' });
+
+    const config = (await getAiConfig()).gemini;
+    if (!config.apiKey) {
+      return res.status(503).json({ message: 'Add a Gemini key in Settings first' });
+    }
+
+    const instruction =
+      'You rewrite short office announcements for an Indian company. ' +
+      'Reply with exactly one sentence, under 18 words, polite and clear. ' +
+      'It is read aloud immediately after the staff member name, so never include a name, ' +
+      'a greeting, quotation marks or any explanation. Reply with the sentence only.';
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: draft }] }],
+          systemInstruction: { parts: [{ text: instruction }] },
+          generationConfig: { maxOutputTokens: 2048, temperature: 0.4 }
+        })
+      }
+    );
+
+    const data = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json({ message: data?.error?.message || 'Gemini refused' });
+    }
+
+    const reply = (data?.candidates?.[0]?.content?.parts || [])
+      .map(part => part.text || '')
+      .join('')
+      .replace(/^[\s"'`]+|[\s"'`]+$/g, '')
+      .split('\n')[0]
+      .trim();
+
+    if (!reply) return res.status(502).json({ message: 'Gemini sent nothing back' });
+    res.json({ reply });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -212,26 +326,47 @@ router.put('/ringtones', authMiddleware, ownerOnly, async (req, res) => {
 
 router.post('/ring', authMiddleware, ownerOnly, async (req, res) => {
   try {
-    const { staffIds, message = '', speak = false, repeat = 3, urgent = false } = req.body || {};
+    const {
+      staffIds,
+      message = '',
+      mode = 'ring',
+      lang = 'en',
+      durationMs = 30000,
+      urgent = false
+    } = req.body || {};
     if (!Array.isArray(staffIds) || !staffIds.length) {
-      return res.status(400).json({ message: 'Kam se kam ek staff select kijiye' });
+      return res.status(400).json({ message: 'Select at least one staff member' });
     }
 
-    const assigned = await readSetting(RINGTONE_KEY, {});
+    const announcing = mode === 'announce';
+    const speechLang = LANGS.includes(lang) ? lang : 'en';
+    const line = String(message).slice(0, 400).trim();
+
+    if (announcing && !line) {
+      return res.status(400).json({ message: 'An announcement needs a message' });
+    }
+
+    // One ringtone for the whole office — the MD picks it once.
+    const ringtone = await readRingtone();
+    const ringFor = Math.max(3000, Math.min(120000, Number(durationMs) || 30000));
     const staff = await User.find({ _id: { $in: staffIds } }).select('name username role');
     const ringId = crypto.randomBytes(8).toString('hex');
     const sentAt = Date.now();
 
     const targets = staff.map(person => {
       const id = String(person._id);
-      const choice = assigned[id] || { tone: DEFAULT_TONE };
+      // The announcement greets the person by name, the way it would be said
+      // over a real office PA system.
+      const speech = announcing ? `${person.name}, ${line}` : '';
       const delivered = pushTo(id, 'ring', {
         ringId,
-        message: String(message).slice(0, 400),
-        tone: choice.tone || DEFAULT_TONE,
-        customUrl: choice.customUrl || '',
-        speak: Boolean(speak),
-        repeat: Math.max(1, Math.min(10, Number(repeat) || 3)),
+        message: line,
+        mode: announcing ? 'announce' : 'ring',
+        speech,
+        lang: speechLang,
+        tone: ringtone.tone,
+        customUrl: ringtone.customUrl,
+        durationMs: ringFor,
         urgent: Boolean(urgent),
         fromName: req.user.name,
         sentAt
@@ -239,7 +374,6 @@ router.post('/ring', authMiddleware, ownerOnly, async (req, res) => {
       return {
         userId: id,
         name: person.name,
-        tone: choice.tone || DEFAULT_TONE,
         online: delivered > 0,
         acknowledgedAt: null
       };
@@ -247,7 +381,8 @@ router.post('/ring', authMiddleware, ownerOnly, async (req, res) => {
 
     const entry = {
       ringId,
-      message: String(message).slice(0, 400),
+      message: line,
+      mode: announcing ? 'announce' : 'ring',
       byName: req.user.name,
       sentAt,
       targets
@@ -309,22 +444,17 @@ router.post('/ack', authMiddleware, async (req, res) => {
 router.get('/status', authMiddleware, ownerOnly, async (req, res) => {
   try {
     const staff = await User.find({ role: { $ne: 'owner' } }).select('name username role isActive');
-    const assigned = await readSetting(RINGTONE_KEY, {});
     const log = await readSetting(LOG_KEY, []);
 
     res.json({
-      staff: staff.map(person => {
-        const id = String(person._id);
-        const choice = assigned[id] || { tone: DEFAULT_TONE };
-        return {
-          _id: id,
-          name: person.name,
-          username: person.username,
-          online: isOnline(id),
-          tone: choice.tone || DEFAULT_TONE,
-          customName: choice.customName || ''
-        };
-      }),
+      ringtone: await readRingtone(),
+      tones: TONES,
+      staff: staff.map(person => ({
+        _id: String(person._id),
+        name: person.name,
+        username: person.username,
+        online: isOnline(String(person._id))
+      })),
       log: Array.isArray(log) ? log.slice(0, 20) : []
     });
   } catch (error) {
