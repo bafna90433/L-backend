@@ -53,3 +53,13 @@ test('uses atomic unique keys for attendance and settings upserts', () => {
   });
   assert.deepEqual(__testing.uniqueWhereForUpsert('SystemSettings', { key: 'kiosk_hours' }), { key: 'kiosk_hours' });
 });
+
+test('persists production breaks and uses Prisma SQL null for empty audit snapshots', () => {
+  const { Prisma } = require('@prisma/client');
+  assert.equal(__testing.cleanData(__testing.specs.ProductionDay, { breakMinutes: 30 }).breakMinutes, 30);
+  const data = __testing.cleanData(__testing.specs.ProductionLog, { action: 'entry-created', before: null, after: { pieces: 3 } });
+  assert.equal(data.before, Prisma.DbNull);
+  assert.deepEqual(data.after, { pieces: 3 });
+  const date = new Date('2026-10-05');
+  assert.deepEqual(__testing.uniqueWhereForUpsert('ProductionDay', { labourId: 'w', date }), { labourId_date: { labourId: 'w', date } });
+});

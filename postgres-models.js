@@ -1,4 +1,4 @@
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient, Prisma } = require('@prisma/client');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const productionTransactions = new AsyncLocalStorage();
 
@@ -183,6 +183,10 @@ const cleanData = (spec, input = {}, { includeId = false } = {}) => {
   for (const field of spec.fields) {
     if (source[field] === undefined) continue;
     const value = source[field];
+    if (value === null && spec.delegate === 'productionLog' && ['before', 'after'].includes(field)) {
+      data[field] = Prisma.DbNull;
+      continue;
+    }
     data[field] = field.endsWith('Id') || ['sender', 'receiver', 'requestedBy', 'approvedBy', 'createdBy', 'acknowledgedBy', 'assignedTo', 'completedBy', 'completionRequestedBy'].includes(field)
       ? relationValue(value)
       : value;

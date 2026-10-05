@@ -8,6 +8,15 @@ const emptySource = () => ({
   reminders: [], tasks: [], messages: [], departments: [], systemSettings: []
 });
 
+test('accepts production workers without a payroll contact number', () => {
+  const source = emptySource();
+  source.labours.push({ _id: oid('production-worker'), name: 'Production Only', whatsapp: '', monthlySalary: 0, createdAt: new Date('2026-10-05') });
+  const mapped = mapMongoData(source);
+  assert.doesNotThrow(() => validateRequiredValues(mapped));
+  assert.equal(mapped.labours[0].whatsapp, '');
+  assert.equal(mapped.labours[0].monthlySalary, 0);
+});
+
 test('maps MongoDB identifiers and preserves required values', () => {
   const data = mapMongoData({
     users: [{ _id: oid('u1'), username: 'owner', password: 'hash', name: 'Owner', role: 'owner' }],

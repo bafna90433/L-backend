@@ -120,7 +120,7 @@ function validateRequiredValues(data) {
   const errors = [];
   const required = {
     users: ['id', 'username', 'password', 'name', 'role'],
-    labours: ['id', 'name', 'whatsapp', 'monthlySalary', 'createdAt'],
+    labours: ['id', 'name', 'monthlySalary', 'createdAt'],
     attendances: ['id', 'labourId', 'date', 'status'],
     cashTransactions: ['id', 'txType', 'category', 'amount', 'date', 'staffId'],
     advanceRequests: ['id', 'labourId', 'amount', 'date', 'requestedBy'],
