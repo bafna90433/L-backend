@@ -209,6 +209,9 @@ const ToyProcessSchema = new mongoose.Schema({
   sortOrder: { type: Number, default: 0 },
   // Expected pieces an hour. 0 means no target has been set.
   targetPerHour: { type: Number, default: 0 },
+  // What a whole shift should produce — the floor runs 8 and 12 hour shifts.
+  target8h: { type: Number, default: 0 },
+  target12h: { type: Number, default: 0 },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });

@@ -355,6 +355,13 @@ model ToyProcess {
    * Expected pieces an hour. 0 means "no target set".
    */
   targetPerHour Int      @default(0)
+  /**
+   * What a whole shift should produce. The floor runs eight-hour and
+   * twelve-hour shifts, and a long shift is not simply the rate times twelve —
+   * so each is stored on its own. 0 falls back to the hourly rate.
+   */
+  target8h      Int      @default(0)
+  target12h     Int      @default(0)
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
 

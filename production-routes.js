@@ -74,7 +74,7 @@ function createProductionRouter(options = {}) {
     return {
       types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0 })),
       toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0 })),
-      processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, sortOrder: row.sortOrder || 0 })),
+      processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0 })),
       workers: workers.filter(row => row.status === 'active').map(workerView).sort((a, b) => a.name.localeCompare(b.name)),
       archivedWorkers: workers.filter(row => row.status !== 'active').map(workerView).sort((a, b) => a.name.localeCompare(b.name))
     };
@@ -106,7 +106,7 @@ function createProductionRouter(options = {}) {
   const specs = [
     { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder'] },
     { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId'] },
-    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'toyId'] }
+    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId'] }
   ];
   const masterData = async (spec, body, previous = {}) => {
     const data = {};
@@ -115,7 +115,9 @@ function createProductionRouter(options = {}) {
     if (!String(merged.name || '').trim()) fail('Name is required.');
     data.name = String(merged.name).trim().slice(0, 100);
     if (data.sortOrder !== undefined) integer(data.sortOrder, 'Sort order');
-    if (data.targetPerHour !== undefined && (typeof data.targetPerHour !== 'number' || !Number.isFinite(data.targetPerHour) || data.targetPerHour < 0)) fail('Target must be a nonnegative number.');
+    for (const field of ['targetPerHour', 'target8h', 'target12h']) {
+      if (data[field] !== undefined && (typeof data[field] !== 'number' || !Number.isFinite(data[field]) || data[field] < 0)) fail('Target must be a nonnegative number.');
+    }
     if (spec.path === 'toys') { await activeParent(ToyType, merged.typeId, 'Category'); data.typeId = id(merged.typeId); if (data.code !== undefined) data.code = String(data.code).slice(0, 50); }
     if (spec.path === 'processes') {
       const toy = await activeParent(Toy, merged.toyId, 'Toy'); await activeParent(ToyType, id(toy.typeId), 'Category'); data.toyId = id(merged.toyId);
