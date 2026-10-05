@@ -34,7 +34,7 @@ test('Postgres production operations use the serializable transaction client and
       assert.equal(options.isolationLevel, 'Serializable'); assert.equal(options.timeout, 15000); attempts++;
       if (attempts === 1) throw Object.assign(new Error('Write conflict'), { code: 'P2034' });
       const client = {
-        productionDay: { findMany: async () => { called.push('day-read'); return []; }, upsert: async options => { called.push('day-upsert'); assert.ok(options.where.labourId_date); return { id: 'day', ...options.create }; } },
+        productionDay: { findMany: async () => { called.push('day-read'); return []; }, upsert: async options => { called.push('day-upsert'); assert.ok(options.where.date_labourId); return { id: 'day', ...options.create }; } },
         productionEntry: { create: async options => { called.push('entry-create'); return { id: 'entry', ...options.data }; } },
         productionLog: { create: async options => { called.push('audit-create'); return { id: 'log', ...options.data }; } }
       };

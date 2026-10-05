@@ -21,7 +21,7 @@ function fixture() {
     ToyType: [{ _id: 'type', name: 'Friction', isActive: true }],
     Toy: [{ _id: 'toy', name: 'Bird', typeId: 'type', isActive: true }, { _id: 'toy2', name: 'Fish', typeId: 'type', isActive: true }],
     ToyProcess: [{ _id: 'process', name: 'Body assembly', toyId: 'toy', isActive: true }, { _id: 'process2', name: 'Wheel joint', toyId: 'toy2', isActive: true }],
-    ProductionDay: [], ProductionEntry: [], ProductionLog: []
+    ProductionDay: [], ProductionEntry: [], ProductionLog: [], SystemSettings: []
   };
   let seq = 0, failAudit = false, tail = Promise.resolve();
   const matches = (row, where) => Object.entries(where).every(([key, value]) => {
@@ -95,12 +95,12 @@ test('HTTP validates selection, strict dates/integers and cumulative attendance 
 });
 test('HTTP entry edits preserve attribution, move dates, exclude self from budget and audit full before/after', async t => {
   const { request, entry, data } = await setup(t);
-  const created = await request('supervisor', 'POST', '/entries', entry({ minutes: 720 }));
+  const created = await request('supervisor', 'POST', '/entries', entry({ minutes: 660 }));
   assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { pieces: 90, enteredByName: 'Spoofed', enteredBy: 'spoofed', createdAt: '2000-01-01' })).status, 200);
   assert.equal(data.ProductionEntry[0].enteredByName, 'Floor Supervisor'); assert.equal(data.ProductionEntry[0].enteredBy, 'supervisor');
   const log = data.ProductionLog.at(-1); assert.equal(log.byName, 'Production Admin'); assert.equal(log.before.pieces, 100); assert.equal(log.after.pieces, 90); assert.equal(log.before.toyId, 'toy');
-  assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { date: '2026-10-06', labourId: 'w2', minutes: 481 })).status, 400);
-  assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { date: '2026-10-06', labourId: 'w2', minutes: 480 })).status, 200);
+  assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { date: '2026-10-06', labourId: 'w2', minutes: 451 })).status, 400);
+  assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { date: '2026-10-06', labourId: 'w2', minutes: 450 })).status, 200);
   assert.equal(data.ProductionEntry[0].date.toISOString(), '2026-10-06T00:00:00.000Z');
 });
 test('HTTP audit failure rolls back entries, attendance, deletes and masters', async t => {
@@ -118,7 +118,7 @@ test('HTTP worker management preserves payroll and history when archived', async
   const { request, entry, data } = await setup(t);
   await request('supervisor', 'POST', '/entries', entry());
   const worker = await request('admin', 'POST', '/workers', { name: 'New Woman', gender: 'Female', empCode: 'N1', department: 'Toys', monthlySalary: 999999 });
-  assert.equal(worker.status, 200); assert.equal(worker.body.shiftMinutes, 480); assert.equal(data.Labour.at(-1).monthlySalary, 0);
+  assert.equal(worker.status, 200); assert.equal(worker.body.shiftMinutes, 450); assert.equal(data.Labour.at(-1).monthlySalary, 0);
   assert.equal((await request('admin', 'PUT', '/workers/w1', { name: 'Renamed Worker', monthlySalary: 0, whatsapp: 'overwrite', shiftStart: '08:30' })).status, 200);
   assert.equal(data.Labour[0].monthlySalary, 25000); assert.equal(data.Labour[0].whatsapp, 'existing-phone'); assert.equal(data.Labour[0].shiftStart, '07:00');
   assert.equal((await request('admin', 'DELETE', '/workers/w1')).status, 200);
@@ -148,4 +148,34 @@ test('HTTP catalogue initialization is admin-only, idempotent and preserves arch
   assert.equal((await request('admin', 'POST', '/processes', { name: 'Invalid', toyId: 'missing' })).status, 404);
   assert.equal((await request('admin', 'POST', '/toys', { name: 'Missing category' })).status, 400);
   assert.equal((await request('admin', 'POST', '/processes', { name: 'Missing toy' })).status, 400);
+});
+
+test('HTTP shift settings are stored, applied to available hours and refused when unworkable', async t => {
+  const { request, data } = await setup(t);
+  t.after(() => require('../production-rules').configureShifts(null));
+
+  const defaults = await request('owner', 'GET', '/shifts');
+  assert.equal(defaults.status, 200);
+  assert.equal(defaults.body.hours.Male, 11);
+  assert.equal(defaults.body.hours.Female, 7.5);
+  assert.equal(defaults.body.breaks.length, 3);
+
+  assert.equal((await request('supervisor', 'PUT', '/shifts', defaults.body)).status, 403);
+
+  const saved = await request('admin', 'PUT', '/shifts', {
+    shifts: { Male: { start: '09:00', end: '19:00' }, Female: { start: '10:00', end: '17:00' } },
+    breaks: [{ label: 'Lunch', from: '13:00', to: '14:00' }]
+  });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.hours.Male, 9);
+  assert.equal(saved.body.hours.Female, 6);
+  assert.equal(data.SystemSettings[0].value.breaks.length, 1);
+  assert.equal(data.ProductionLog.at(-1).action, 'shifts-updated');
+
+  // The stored times drive what the day view offers the supervisor.
+  const day = await request('owner', 'GET', '/day?date=2026-10-05');
+  assert.equal(day.body.workers.find(row => row.id === 'w2').availableMinutes, 360);
+
+  assert.equal((await request('admin', 'PUT', '/shifts', { shifts: { Male: { start: '09:00', end: '19:00' }, Female: { start: '10:00', end: '17:00' } }, breaks: [{ label: 'All day', from: '10:00', to: '17:00' }] })).status, 400);
+  assert.equal((await request('admin', 'GET', '/shifts')).body.hours.Female, 6);
 });

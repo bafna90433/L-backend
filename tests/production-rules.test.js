@@ -1,15 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
-const { availableMinutesFor, attendance, readEntry, dayStart, dayKey, toMinutes, performanceFlags } = require('../production-rules');
+const { availableMinutesFor, attendance, readEntry, dayStart, dayKey, toMinutes, performanceFlags, configureShifts, shiftSettings, readShiftSettings, breakMinutesFor } = require('../production-rules');
 
 test('shift availability covers actual breaks, leave, half, late and early attendance', () => {
-  assert.equal(availableMinutesFor({ gender: 'Male' }), 720);
-  assert.equal(availableMinutesFor({ gender: 'Female' }), 480);
+  // The floor's own figures: 12 hours less an hour of breaks is 11, and
+  // 8 hours 30 less the same hour is 7 hours 30.
+  assert.equal(availableMinutesFor({ gender: 'Male' }), 660);
+  assert.equal(availableMinutesFor({ gender: 'Female' }), 450);
   assert.equal(attendance({ gender: 'Female' }, { inTime: '10:30', outTime: '17:30', breakMinutes: 30 }).availableMinutes, 390);
-  assert.equal(attendance({ gender: 'Male' }, { status: 'half' }).availableMinutes, 360);
-  assert.equal(attendance({ gender: 'Female' }, { status: 'half' }).availableMinutes, 240);
-  assert.equal(attendance({ gender: 'Female' }, { status: 'half', breakMinutes: 0 }).availableMinutes, 270);
+  assert.equal(attendance({ gender: 'Male' }, { status: 'half' }).availableMinutes, 330);
+  assert.equal(attendance({ gender: 'Female' }, { status: 'half' }).availableMinutes, 225);
+  assert.equal(attendance({ gender: 'Female' }, { status: 'half', breakMinutes: 0 }).availableMinutes, 255);
   assert.equal(attendance({ gender: 'Female' }, { status: 'leave' }).availableMinutes, 0);
 });
 test('rejects impossible calendars, invalid clock values, negative/fractional input and coercion', () => {
@@ -36,4 +38,33 @@ test('flags use only prior weighted days of the same worker, toy and process', (
   assert.equal(flags.length, 1); assert.equal(flags[0].date, '2026-10-03'); assert.equal(flags[0].usualRate, 66.7); assert.equal(flags[0].baselineDays, 2);
   assert.deepEqual(performanceFlags([row('2026-10-01', 100), row('2026-10-02', 50)]), []);
   assert.equal(performanceFlags([row('2026-10-01', 100), row('2026-10-02', 20, 30), row('2026-10-02', 30, 30)]).length, 0);
+});
+
+test('shift and break times come from settings, and a break only counts if it falls in the hours worked', t => {
+  t.after(() => configureShifts(null));
+
+  // Leaving before lunch must not have lunch deducted.
+  assert.equal(availableMinutesFor({ gender: 'Female' }, { inTime: '09:30', outTime: '13:00' }), 195);
+  assert.equal(availableMinutesFor({ gender: 'Female' }, { inTime: '09:30', outTime: '16:00' }), 345);
+  assert.equal(breakMinutesFor({ gender: 'Female' }, '09:30', '13:00'), 15);
+  assert.equal(breakMinutesFor({ gender: 'Male' }, '08:30', '20:30'), 60);
+
+  const changed = configureShifts({
+    shifts: { Male: { start: '09:00', end: '19:00' }, Female: { start: '10:00', end: '17:00' } },
+    breaks: [{ label: 'Lunch', from: '13:00', to: '14:00' }]
+  });
+  assert.equal(changed.breaks.length, 1);
+  assert.equal(availableMinutesFor({ gender: 'Male' }), 540);
+  assert.equal(availableMinutesFor({ gender: 'Female' }), 360);
+  assert.equal(configureShifts(null).breaks.length, 3);
+  assert.equal(availableMinutesFor({ gender: 'Male' }), 660);
+
+  // Breaks are sorted, and a configuration that cannot be worked is refused.
+  assert.deepEqual(readShiftSettings({ shifts: shiftSettings().shifts, breaks: [{ label: 'B', from: '16:00', to: '16:15' }, { label: 'A', from: '11:00', to: '11:15' }] }).breaks.map(row => row.label), ['A', 'B']);
+  const shifts = shiftSettings().shifts;
+  assert.throws(() => readShiftSettings({ shifts, breaks: [{ label: 'One', from: '11:00', to: '12:00' }, { label: 'Two', from: '11:30', to: '12:30' }] }), /overlaps/);
+  assert.throws(() => readShiftSettings({ shifts, breaks: [{ label: 'Early', from: '09:00', to: '09:15' }] }), /outside the female shift/);
+  assert.throws(() => readShiftSettings({ shifts, breaks: [{ label: 'Dawn', from: '08:00', to: '08:15' }] }), /outside the male shift/);
+  assert.throws(() => readShiftSettings({ shifts: { Male: { start: '09:00', end: '08:00' }, Female: shifts.Female }, breaks: [] }), /must end after it starts/);
+  assert.throws(() => readShiftSettings({ shifts: { Male: shifts.Male, Female: { start: '10:00', end: '11:00' } }, breaks: [{ label: 'Long', from: '10:00', to: '11:00' }] }), /no working time/);
 });

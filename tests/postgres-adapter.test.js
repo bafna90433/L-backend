@@ -61,5 +61,8 @@ test('persists production breaks and uses Prisma SQL null for empty audit snapsh
   assert.equal(data.before, Prisma.DbNull);
   assert.deepEqual(data.after, { pieces: 3 });
   const date = new Date('2026-10-05');
-  assert.deepEqual(__testing.uniqueWhereForUpsert('ProductionDay', { labourId: 'w', date }), { labourId_date: { labourId: 'w', date } });
+  // ProductionDay declares @@unique([date, labourId]) and Attendance the other
+  // way round, so the two compound keys are not interchangeable.
+  assert.deepEqual(__testing.uniqueWhereForUpsert('ProductionDay', { labourId: 'w', date }), { date_labourId: { date, labourId: 'w' } });
+  assert.deepEqual(__testing.uniqueWhereForUpsert('Attendance', { labourId: 'w', date }), { labourId_date: { labourId: 'w', date } });
 });

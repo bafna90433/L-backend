@@ -1,11 +1,32 @@
-const SHIFTS = {
-  Male: { start: '08:30', end: '20:30', breakMinutes: 0, label: '8:30 am – 8:30 pm' },
-  Female: { start: '09:30', end: '18:30', breakMinutes: 60, label: '9:30 am – 6:30 pm' }
+// Shift and break times are the factory's to set, so they live in settings and
+// are only seeded from these. Breaks are deducted by overlap, not as a flat
+// hour: someone who leaves before lunch never took lunch.
+const DEFAULT_BREAKS = [
+  { label: 'Morning tea', from: '11:00', to: '11:15' },
+  { label: 'Lunch', from: '13:00', to: '13:30' },
+  { label: 'Evening tea', from: '16:00', to: '16:15' }
+];
+const DEFAULT_SHIFTS = { Male: { start: '08:30', end: '20:30' }, Female: { start: '09:30', end: '18:00' } };
+const clock = value => Number(value.slice(0, 2)) * 60 + Number(value.slice(3));
+const pretty = value => {
+  const total = clock(value), hour = Math.floor(total / 60), minute = total % 60;
+  return `${((hour + 11) % 12) + 1}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'am' : 'pm'}`;
 };
+let settings = { shifts: DEFAULT_SHIFTS, breaks: DEFAULT_BREAKS };
+const overlap = (fromA, toA, fromB, toB) => Math.max(0, Math.min(toA, toB) - Math.max(fromA, fromB));
+/** Break minutes that fall inside a worked window. */
+const breakMinutesWithin = (from, to) => settings.breaks.reduce((total, row) => total + overlap(clock(row.from), clock(row.to), from, to), 0);
+const buildShift = gender => {
+  const shift = settings.shifts[gender];
+  return { ...shift, breaks: settings.breaks, breakMinutes: breakMinutesWithin(clock(shift.start), clock(shift.end)), label: `${pretty(shift.start)} – ${pretty(shift.end)}` };
+};
+const SHIFTS = { get Male() { return buildShift('Male'); }, get Female() { return buildShift('Female'); } };
+const shiftSettings = () => ({ shifts: { Male: { ...settings.shifts.Male }, Female: { ...settings.shifts.Female } }, breaks: settings.breaks.map(row => ({ ...row })) });
+const configureShifts = value => { settings = value ? readShiftSettings(value) : { shifts: DEFAULT_SHIFTS, breaks: DEFAULT_BREAKS }; return shiftSettings(); };
 const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
 const id = value => String(value?._id || value?.id || value || '');
 const plain = value => value?.toObject?.() || value;
-const shiftFor = worker => SHIFTS[worker?.gender === 'Female' ? 'Female' : 'Male'];
+const shiftFor = worker => buildShift(worker?.gender === 'Female' ? 'Female' : 'Male');
 const integer = (value, label, maximum = Number.MAX_SAFE_INTEGER) => {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > maximum) fail(`${label} must be a nonnegative whole number.`);
   return value;
@@ -30,9 +51,17 @@ const dayEnd = value => new Date(dayStart(value).getTime() + 86400000 - 1);
 const availableMinutesFor = (worker, day) => {
   const shift = shiftFor(worker);
   if (day?.status === 'leave') return 0;
-  const elapsed = Math.max(0, Math.min(toMinutes(day?.outTime || shift.end), toMinutes(shift.end)) - Math.max(toMinutes(day?.inTime || shift.start), toMinutes(shift.start)));
-  const minutes = Math.max(0, elapsed - (day?.breakMinutes ?? shift.breakMinutes));
+  const from = Math.max(toMinutes(day?.inTime || shift.start), toMinutes(shift.start));
+  const to = Math.min(toMinutes(day?.outTime || shift.end), toMinutes(shift.end));
+  const elapsed = Math.max(0, to - from);
+  const taken = day?.breakMinutes ?? breakMinutesWithin(from, to);
+  const minutes = Math.max(0, elapsed - taken);
   return day?.status === 'half' ? Math.min(minutes, Math.floor((toMinutes(shift.end) - toMinutes(shift.start) - (day?.breakMinutes ?? shift.breakMinutes)) / 2)) : minutes;
+};
+/** The break default shown for a window, so leaving early does not deduct lunch. */
+const breakMinutesFor = (worker, inTime, outTime) => {
+  const shift = shiftFor(worker);
+  return breakMinutesWithin(Math.max(toMinutes(inTime || shift.start), toMinutes(shift.start)), Math.min(toMinutes(outTime || shift.end), toMinutes(shift.end)));
 };
 const attendance = (worker, body) => {
   const shift = shiftFor(worker);
@@ -42,10 +71,43 @@ const attendance = (worker, body) => {
   const start = toMinutes(inTime), end = toMinutes(outTime);
   if (end <= start) fail('Departure must be after arrival.');
   if (start < toMinutes(shift.start) || end > toMinutes(shift.end)) fail('Attendance must be within the worker shift.');
-  const breakMinutes = integer(body.breakMinutes ?? shift.breakMinutes, 'Break minutes', end - start);
+  const breakMinutes = integer(body.breakMinutes ?? breakMinutesWithin(start, end), 'Break minutes', end - start);
   const result = { status, inTime, outTime, breakMinutes, note: String(body.note || '').slice(0, 200) };
   result.availableMinutes = availableMinutesFor(worker, result);
   return result;
+};
+/** Checks a shift/break configuration before it is stored or applied. */
+const readShiftSettings = body => {
+  const source = body && typeof body === 'object' ? body : fail('Send shift settings.');
+  const shifts = {};
+  for (const gender of ['Male', 'Female']) {
+    const row = source.shifts?.[gender] || fail(`${gender} shift times are required.`);
+    const start = toMinutes(row.start), end = toMinutes(row.end);
+    if (end <= start) fail(`${gender} shift must end after it starts.`);
+    shifts[gender] = { start: row.start, end: row.end };
+  }
+  const list = Array.isArray(source.breaks) ? source.breaks : fail('Breaks must be a list.');
+  if (list.length > 6) fail('Up to six breaks can be set.');
+  const breaks = list.map(row => {
+    const label = String(row?.label || '').trim().slice(0, 40) || fail('Every break needs a name.');
+    const from = toMinutes(row.from), to = toMinutes(row.to);
+    if (to <= from) fail(`${label} must end after it starts.`);
+    return { label, from: row.from, to: row.to };
+  }).sort((a, b) => clock(a.from) - clock(b.from));
+  breaks.forEach((row, index) => {
+    const previous = breaks[index - 1];
+    if (previous && clock(row.from) < clock(previous.to)) fail(`${row.label} overlaps ${previous.label}.`);
+    // A break outside a shift would silently deduct nothing for those workers.
+    for (const gender of ['Male', 'Female']) {
+      if (clock(row.from) < toMinutes(shifts[gender].start) || clock(row.to) > toMinutes(shifts[gender].end)) fail(`${row.label} falls outside the ${gender.toLowerCase()} shift.`);
+    }
+  });
+  for (const gender of ['Male', 'Female']) {
+    const span = toMinutes(shifts[gender].end) - toMinutes(shifts[gender].start);
+    const total = breaks.reduce((sum, row) => sum + clock(row.to) - clock(row.from), 0);
+    if (total >= span) fail(`Breaks leave no working time in the ${gender.toLowerCase()} shift.`);
+  }
+  return { shifts, breaks };
 };
 const readEntry = body => {
   if (!body.labourId || !body.toyId || !body.processId) fail('Pick the worker, toy and process.');
@@ -73,4 +135,4 @@ const performanceFlags = entries => {
   }
   return flags;
 };
-module.exports = { SHIFTS, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, availableMinutesFor, attendance, readEntry, rate, performanceFlags };
+module.exports = { SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesFor, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, availableMinutesFor, attendance, readEntry, rate, performanceFlags };

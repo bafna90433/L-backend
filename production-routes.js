@@ -10,13 +10,23 @@ function createProductionRouter(options = {}) {
   const models = options.models || productionModels(require('./models'));
   const resolveAccess = options.resolveAccess || require('./access-control').resolveUserAccess;
   const atomic = options.transaction || transaction;
-  const { User, Labour, ToyType, Toy, ToyProcess, ProductionDay, ProductionEntry, ProductionLog } = models;
+  const { User, Labour, ToyType, Toy, ToyProcess, ProductionDay, ProductionEntry, ProductionLog, SystemSettings } = models;
   const router = express.Router();
+  // Shift and break times are stored, not compiled in, so the office can change
+  // them. Re-read briefly rather than per request: every handler needs them.
+  const SHIFT_KEY = 'production.shifts';
+  let shiftsReadAt = 0;
+  const loadShifts = async () => {
+    if (!SystemSettings || Date.now() - shiftsReadAt < 15000) return;
+    try { rules.configureShifts((await SystemSettings.findOne({ key: SHIFT_KEY }))?.value || null); shiftsReadAt = Date.now(); }
+    catch { /* A settings read failure leaves the last known times in place. */ }
+  };
   const auth = async (req, res, next) => {
     try {
       const header = req.headers.authorization || '';
       if (!header.startsWith('Bearer ')) return res.status(401).json({ message: 'Authorization token required' });
       const decoded = jwt.verify(header.slice(7), options.jwtSecret || SECRET);
+      await loadShifts();
       req.user = await User.findById(decoded.id).select('-password');
       if (!req.user) return res.status(401).json({ message: 'User not found' });
       req.access = await resolveAccess(req.user);
@@ -67,6 +77,18 @@ function createProductionRouter(options = {}) {
   };
   const sort = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name);
   const workerView = worker => ({ id: id(worker), name: worker.name, gender: worker.gender || 'Male', department: worker.department || '', empCode: worker.empCode || '', status: worker.status, shift: shiftFor(worker).label, shiftStart: shiftFor(worker).start, shiftEnd: shiftFor(worker).end, shiftMinutes: availableMinutesFor(worker) });
+  const shiftHours = () => ({ Male: availableMinutesFor({ gender: 'Male' }) / 60, Female: availableMinutesFor({ gender: 'Female' }) / 60 });
+  router.get('/shifts', auth, read, handle(async () => ({ ...rules.shiftSettings(), hours: shiftHours(), labels: { Male: shiftFor({ gender: 'Male' }).label, Female: shiftFor({ gender: 'Female' }).label } })));
+  router.put('/shifts', auth, admin, handle(async req => {
+    if (!SystemSettings) fail('Shift settings are not available on this server.');
+    const value = rules.readShiftSettings(req.body || {});
+    const before = rules.shiftSettings();
+    await SystemSettings.findOneAndUpdate({ key: SHIFT_KEY }, { key: SHIFT_KEY, value }, { upsert: true, new: true });
+    rules.configureShifts(value); shiftsReadAt = Date.now();
+    const hours = shiftHours();
+    await audit(req, 'shifts-updated', `Shift times set to male ${value.shifts.Male.start}–${value.shifts.Male.end} (${hours.Male} hr) and female ${value.shifts.Female.start}–${value.shifts.Female.end} (${hours.Female} hr), ${value.breaks.length} breaks`, before, value);
+    return { ...rules.shiftSettings(), hours, labels: { Male: shiftFor({ gender: 'Male' }).label, Female: shiftFor({ gender: 'Female' }).label } };
+  }, true));
   router.get('/masters', auth, read, handle(async () => {
     const [types, toys, processes, workers] = await Promise.all([ToyType.find({}), Toy.find({}), ToyProcess.find({}), Labour.find({})]);
     const typeIds = new Set(types.filter(row => row.isActive !== false).map(id));
@@ -157,7 +179,7 @@ function createProductionRouter(options = {}) {
     const [days, entries, workers, toys, processes, types] = await Promise.all([ProductionDay.find(filter), ProductionEntry.find(filter), Labour.find({}), Toy.find({}), ToyProcess.find({}), ToyType.find({})]);
     return { date: dayKey(date), workers: workers.filter(row => row.status === 'active').map(worker => {
       const day = days.find(row => id(row.labourId) === id(worker)), logged = entries.filter(row => id(row.labourId) === id(worker));
-      return { ...workerView(worker), status: day?.status || 'present', inTime: day?.inTime || shiftFor(worker).start, outTime: day?.outTime || shiftFor(worker).end, breakMinutes: day?.breakMinutes ?? shiftFor(worker).breakMinutes, availableMinutes: day?.availableMinutes ?? availableMinutesFor(worker, day), workedMinutes: logged.reduce((sum, row) => sum + row.minutes, 0), pieces: logged.reduce((sum, row) => sum + row.pieces, 0), note: day?.note || '' };
+      return { ...workerView(worker), status: day?.status || 'present', inTime: day?.inTime || shiftFor(worker).start, outTime: day?.outTime || shiftFor(worker).end, breakMinutes: day?.breakMinutes ?? rules.breakMinutesFor(worker, day?.inTime, day?.outTime), availableMinutes: day?.availableMinutes ?? availableMinutesFor(worker, day), workedMinutes: logged.reduce((sum, row) => sum + row.minutes, 0), pieces: logged.reduce((sum, row) => sum + row.pieces, 0), note: day?.note || '' };
     }).sort((a, b) => a.name.localeCompare(b.name)), entries: viewEntries(entries, workers, toys, processes, types).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) };
   }));
   router.post('/day', auth, write, handle(async req => {
