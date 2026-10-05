@@ -78,6 +78,10 @@ function createProductionRouter(options = {}) {
   const sort = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name);
   const workerView = worker => ({ id: id(worker), name: worker.name, gender: worker.gender || 'Male', department: worker.department || '', empCode: worker.empCode || '', status: worker.status, shift: shiftFor(worker).label, shiftStart: shiftFor(worker).start, shiftEnd: shiftFor(worker).end, shiftMinutes: availableMinutesFor(worker) });
   const shiftHours = () => ({ Male: availableMinutesFor({ gender: 'Male' }) / 60, Female: availableMinutesFor({ gender: 'Female' }) / 60 });
+  const shiftLengths = () => Object.fromEntries(['Male', 'Female'].map(gender => {
+    const minutes = availableMinutesFor({ gender });
+    return [gender, { hours: minutes / 60, minutes, label: shiftFor({ gender }).label }];
+  }));
   router.get('/shifts', auth, read, handle(async () => ({ ...rules.shiftSettings(), hours: shiftHours(), labels: { Male: shiftFor({ gender: 'Male' }).label, Female: shiftFor({ gender: 'Female' }).label } })));
   router.put('/shifts', auth, admin, handle(async req => {
     if (!SystemSettings) fail('Shift settings are not available on this server.');
@@ -98,7 +102,11 @@ function createProductionRouter(options = {}) {
       toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0 })),
       processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0 })),
       workers: workers.filter(row => row.status === 'active').map(workerView).sort((a, b) => a.name.localeCompare(b.name)),
-      archivedWorkers: workers.filter(row => row.status !== 'active').map(workerView).sort((a, b) => a.name.localeCompare(b.name))
+      archivedWorkers: workers.filter(row => row.status !== 'active').map(workerView).sort((a, b) => a.name.localeCompare(b.name)),
+      // Shift lengths travel with the catalogue so a shift target can be
+      // labelled with the hours it is actually for, not a figure from before
+      // breaks were taken off.
+      shifts: shiftLengths()
     };
   }));
   const workerData = (body, previous) => {
