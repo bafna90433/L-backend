@@ -4,7 +4,8 @@ const UserSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   name: { type: String, required: true },
-  role: { type: String, enum: ['owner', 'staff', 'staff2'], required: true },
+  role: { type: String, required: true },
+  isActive: { type: Boolean, default: true },
   whatsapp: { type: String, default: '' },
   imageUrl: { type: String, default: '' },
   upiId: { type: String, default: '' }
@@ -12,7 +13,7 @@ const UserSchema = new mongoose.Schema({
 
 const LabourSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  whatsapp: { type: String, required: true },
+  whatsapp: { type: String, default: '' },
   monthlySalary: { type: Number, required: true },
   imageUrl: { type: String, default: '' },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },

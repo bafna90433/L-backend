@@ -1,7 +1,19 @@
 const { PrismaClient } = require('@prisma/client');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const productionTransactions = new AsyncLocalStorage();
 
 const prisma = global.__labourPrisma || new PrismaClient();
 if (process.env.NODE_ENV !== 'production') global.__labourPrisma = prisma;
+const databaseClient = () => productionTransactions.getStore() || prisma;
+async function withProductionTransaction(work) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await prisma.$transaction(client => productionTransactions.run(client, work), { isolationLevel: 'Serializable', timeout: 15000 });
+    } catch (error) {
+      if (error.code !== 'P2034' || attempt === 2) throw error;
+    }
+  }
+}
 
 const specs = {
   User: {
@@ -69,6 +81,36 @@ const specs = {
   SystemSettings: {
     delegate: 'systemSetting',
     fields: ['key', 'value', 'updatedAt']
+  },
+  ToyType: {
+    delegate: 'toyType',
+    fields: ['name', 'sortOrder', 'isActive', 'createdAt']
+  },
+  Toy: {
+    delegate: 'toy',
+    fields: ['typeId', 'name', 'code', 'sortOrder', 'isActive', 'createdAt'],
+    populate: { typeId: { relation: 'type', model: 'ToyType' } }
+  },
+  ToyProcess: {
+    delegate: 'toyProcess',
+    fields: ['toyId', 'name', 'sortOrder', 'targetPerHour', 'isActive', 'createdAt'],
+    populate: { toyId: { relation: 'toy', model: 'Toy' } }
+  },
+  ProductionDay: {
+    delegate: 'productionDay',
+    fields: ['date', 'labourId', 'status', 'inTime', 'outTime', 'breakMinutes', 'availableMinutes', 'note', 'enteredBy', 'enteredByName', 'createdAt', 'updatedAt']
+  },
+  ProductionEntry: {
+    delegate: 'productionEntry',
+    fields: ['date', 'labourId', 'toyId', 'processId', 'minutes', 'pieces', 'note', 'enteredBy', 'enteredByName', 'createdAt', 'updatedAt'],
+    populate: {
+      toyId: { relation: 'toy', model: 'Toy' },
+      processId: { relation: 'process', model: 'ToyProcess' }
+    }
+  },
+  ProductionLog: {
+    delegate: 'productionLog',
+    fields: ['entryId', 'action', 'summary', 'before', 'after', 'byName', 'at']
   },
   DeletedLog: {
     delegate: 'deletedLog',
@@ -183,7 +225,7 @@ class PostgresDocument {
 
   async save() {
     const spec = specs[this.__modelName];
-    const delegate = prisma[spec.delegate];
+    const delegate = databaseClient()[spec.delegate];
     const data = cleanData(spec, this);
     const row = this.__isNew
       ? await delegate.create({ data })
@@ -231,7 +273,7 @@ class Query {
 
   async exec() {
     const spec = specs[this.modelName];
-    const delegate = prisma[spec.delegate];
+    const delegate = databaseClient()[spec.delegate];
     const include = {};
     for (const [field, options] of Object.entries(this.populated)) {
       const mapping = spec.populate?.[field];
@@ -262,7 +304,7 @@ const findExisting = async (delegate, where) => delegate.findFirst({ where: tran
 
 const uniqueWhereForUpsert = (modelName, where) => {
   const translated = translateWhere(where);
-  if (modelName === 'Attendance' && translated.labourId && translated.date) {
+  if (['Attendance', 'ProductionDay'].includes(modelName) && translated.labourId && translated.date) {
     return { labourId_date: { labourId: translated.labourId, date: translated.date } };
   }
   if (modelName === 'SystemSettings' && translated.key) return { key: translated.key };
@@ -271,7 +313,7 @@ const uniqueWhereForUpsert = (modelName, where) => {
 
 function createModel(modelName) {
   const spec = specs[modelName];
-  const delegate = () => prisma[spec.delegate];
+  const delegate = () => databaseClient()[spec.delegate];
 
   function Model(data = {}) {
     return new PostgresDocument(modelName, { ...data, id: data._id || data.id }, true);
@@ -360,6 +402,7 @@ function createModel(modelName) {
 }
 
 module.exports = {
+  withProductionTransaction,
   prisma,
   User: createModel('User'),
   Labour: createModel('Labour'),
@@ -372,5 +415,11 @@ module.exports = {
   Department: createModel('Department'),
   SystemSettings: createModel('SystemSettings'),
   DeletedLog: createModel('DeletedLog'),
+  ToyType: createModel('ToyType'),
+  Toy: createModel('Toy'),
+  ToyProcess: createModel('ToyProcess'),
+  ProductionDay: createModel('ProductionDay'),
+  ProductionEntry: createModel('ProductionEntry'),
+  ProductionLog: createModel('ProductionLog'),
   __testing: { specs, translateWhere, cleanData, uniqueWhereForUpsert }
 };

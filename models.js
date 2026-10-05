@@ -8,7 +8,8 @@ const UserSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
   name: { type: String, required: true },
-  role: { type: String, enum: ['owner', 'staff', 'staff2', 'ai'], required: true },
+  role: { type: String, required: true },
+  isActive: { type: Boolean, default: true },
   whatsapp: { type: String, default: '' },
   imageUrl: { type: String, default: '' },
   upiId: { type: String, default: '' }
@@ -17,7 +18,7 @@ const UserSchema = new mongoose.Schema({
 // Labour Schema
 const LabourSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  whatsapp: { type: String, required: true },
+  whatsapp: { type: String, default: '' },
   monthlySalary: { type: Number, required: true },
   imageUrl: { type: String, default: '' },
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
@@ -184,6 +185,87 @@ const DeletedLogSchema = new mongoose.Schema({
   deletedAt: { type: Date, default: Date.now }
 });
 
+/* ---------------- Toy production ---------------- */
+
+const ToyTypeSchema = new mongoose.Schema({
+  name: { type: String, required: true, unique: true },
+  sortOrder: { type: Number, default: 0 },
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const ToySchema = new mongoose.Schema({
+  typeId: { type: mongoose.Schema.Types.ObjectId, ref: 'ToyType', required: true },
+  name: { type: String, required: true },
+  code: { type: String, default: '' },
+  sortOrder: { type: Number, default: 0 },
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const ToyProcessSchema = new mongoose.Schema({
+  toyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Toy', required: true },
+  name: { type: String, required: true },
+  sortOrder: { type: Number, default: 0 },
+  // Expected pieces an hour. 0 means no target has been set.
+  targetPerHour: { type: Number, default: 0 },
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+// One worker's day: when they came, when they left, and so how long they had.
+const ProductionDaySchema = new mongoose.Schema({
+  date: { type: Date, required: true },
+  labourId: { type: mongoose.Schema.Types.ObjectId, ref: 'Labour', required: true },
+  status: { type: String, enum: ['present', 'half', 'leave'], default: 'present' },
+  inTime: { type: String, default: '' },
+  outTime: { type: String, default: '' },
+  breakMinutes: { type: Number, default: undefined },
+  availableMinutes: { type: Number, default: 0 },
+  note: { type: String, default: '' },
+  enteredBy: { type: String, default: '' },
+  enteredByName: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+ProductionDaySchema.index({ date: 1, labourId: 1 }, { unique: true });
+
+const ProductionEntrySchema = new mongoose.Schema({
+  date: { type: Date, required: true },
+  labourId: { type: mongoose.Schema.Types.ObjectId, ref: 'Labour', required: true },
+  toyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Toy', required: true },
+  processId: { type: mongoose.Schema.Types.ObjectId, ref: 'ToyProcess', required: true },
+  minutes: { type: Number, default: 0 },
+  pieces: { type: Number, default: 0 },
+  note: { type: String, default: '' },
+  enteredBy: { type: String, default: '' },
+  enteredByName: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+ProductionEntrySchema.index({ date: 1 });
+ProductionEntrySchema.index({ labourId: 1 });
+
+// Every change kept, so a corrected number can always be traced back.
+const ProductionLogSchema = new mongoose.Schema({
+  entryId: { type: String, default: '' },
+  action: { type: String, required: true },
+  summary: { type: String, default: '' },
+  before: { type: mongoose.Schema.Types.Mixed, default: null },
+  after: { type: mongoose.Schema.Types.Mixed, default: null },
+  byName: { type: String, default: '' },
+  at: { type: Date, default: Date.now }
+});
+
+const ToyType = mongoose.model('ToyType', ToyTypeSchema);
+const Toy = mongoose.model('Toy', ToySchema);
+const ToyProcess = mongoose.model('ToyProcess', ToyProcessSchema);
+const ProductionDay = mongoose.model('ProductionDay', ProductionDaySchema);
+const ProductionEntry = mongoose.model('ProductionEntry', ProductionEntrySchema);
+const ProductionLog = mongoose.model('ProductionLog', ProductionLogSchema);
+
 const SystemSettings = mongoose.model('SystemSettings', SystemSettingsSchema);
 const DeletedLog = mongoose.model('DeletedLog', DeletedLogSchema);
 
@@ -198,6 +280,12 @@ module.exports = {
   Message,
   Department,
   SystemSettings,
-  DeletedLog
+  DeletedLog,
+  ToyType,
+  Toy,
+  ToyProcess,
+  ProductionDay,
+  ProductionEntry,
+  ProductionLog
 };
 }

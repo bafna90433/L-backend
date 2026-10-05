@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  output = "D:/Office.Pro/.gsd/verification/prisma-generated/client"
 }
 
 datasource db {
@@ -435,3 +436,4 @@ model ProductionLog {
   @@index([at])
   @@index([entryId])
 }
+

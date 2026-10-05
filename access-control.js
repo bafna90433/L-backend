@@ -34,6 +34,11 @@ const PERMISSION_GROUPS = [
     { key: 'ai.studio', label: 'Use Image Studio (AI image generation)' },
     { key: 'ai.council', label: 'Use AI Council (ask Gemini / ChatGPT / Claude)' }
   ] },
+  { group: 'Production', permissions: [
+    { key: 'production.entry', label: 'Record daily production (supervisor)' },
+    { key: 'production.reports', label: 'See production reports and worker performance' },
+    { key: 'production.masters', label: 'Manage production workers, toys, processes and targets' }
+  ] },
   { group: 'Amazon Desk', permissions: [
     { key: 'amazon.view', label: 'Open Amazon Desk (sales, orders, stock)' },
     { key: 'amazon.manage', label: 'Change the Amazon connection settings' }
@@ -59,6 +64,8 @@ const DEFAULT_ROLES = [
   { name: 'Office Staff', slug: 'staff', description: 'Standard office operations', permissions: DEFAULT_STAFF_PERMISSIONS, isSystem: true },
   { name: 'Office Staff 2', slug: 'staff2', description: 'Existing second staff access', permissions: DEFAULT_STAFF_PERMISSIONS, isSystem: true },
   { name: 'AI Studio', slug: 'ai-studio', description: 'AI workspace only — Image Studio and AI Council, no office modules', permissions: ['ai.studio', 'ai.council'], isSystem: true },
+  { name: 'Production Supervisor', slug: 'production-supervisor', description: 'Records daily production on the floor — no office modules', permissions: ['production.entry'], isSystem: true },
+  { name: 'Production Admin', slug: 'production-admin', description: 'Manages production workers and catalogue, entries and reports', permissions: ['production.masters', 'production.entry', 'production.reports'], isSystem: true },
   { name: 'Amazon Desk', slug: 'amazon-desk', description: 'Amazon Desk only — sales, orders and stock, no office modules', permissions: ['amazon.view'], isSystem: true }
 ];
 
@@ -86,7 +93,8 @@ async function resolveUserAccess(user) {
   const legacyRole = user?.role || 'staff';
   if (legacyRole === 'owner') return { roleName: 'MD / Owner', roleId: user?.roleId || null, permissions: ['*'], isActive: user?.isActive !== false };
   if (!providerIsPostgres()) {
-    return { roleName: legacyRole === 'staff2' ? 'Office Staff 2' : 'Office Staff', roleId: null, permissions: DEFAULT_STAFF_PERMISSIONS, isActive: true };
+    const role = DEFAULT_ROLES.find(candidate => candidate.slug === legacyRole);
+    return { roleName: role?.name || legacyRole, roleId: null, permissions: role?.permissions || [], isActive: user?.isActive !== false };
   }
   const role = user?.roleId
     ? await prisma.role.findUnique({ where: { id: user.roleId } })
