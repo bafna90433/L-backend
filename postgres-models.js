@@ -308,8 +308,14 @@ const findExisting = async (delegate, where) => delegate.findFirst({ where: tran
 
 const uniqueWhereForUpsert = (modelName, where) => {
   const translated = translateWhere(where);
-  if (['Attendance', 'ProductionDay'].includes(modelName) && translated.labourId && translated.date) {
+  // Prisma names a compound key after the field order in @@unique, and these
+  // two tables declare theirs the other way round — so they cannot share a
+  // branch. Getting it wrong is rejected with "Unknown argument".
+  if (modelName === 'Attendance' && translated.labourId && translated.date) {
     return { labourId_date: { labourId: translated.labourId, date: translated.date } };
+  }
+  if (modelName === 'ProductionDay' && translated.labourId && translated.date) {
+    return { date_labourId: { date: translated.date, labourId: translated.labourId } };
   }
   if (modelName === 'SystemSettings' && translated.key) return { key: translated.key };
   return null;
