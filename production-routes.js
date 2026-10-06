@@ -252,7 +252,16 @@ function createProductionRouter(options = {}) {
     if (spec.path === 'toys') { await activeParent(ToyType, merged.typeId, 'Category'); data.typeId = id(merged.typeId); if (data.code !== undefined) data.code = String(data.code).slice(0, 50); }
     // Parts adopted from old records have no toy, and renaming one of those
     // must not be blocked by a toy it never had.
-    if (spec.path === 'damage-parts') { if (merged.toyId) { await activeParent(Toy, merged.toyId, 'Toy'); data.toyId = id(merged.toyId); } else data.toyId = ''; }
+    if (spec.path === 'damage-parts') {
+      if (merged.toyId) { await activeParent(Toy, merged.toyId, 'Toy'); data.toyId = id(merged.toyId); } else data.toyId = '';
+      // One part name per toy. Two rows called "Top part" on the same toy
+      // cannot be told apart later, and damage would be split between them.
+      const clash = (await DamagePart.find({})).find(row => id(row) !== id(previous)
+        && row.isActive !== false
+        && id(row.toyId) === data.toyId
+        && row.name.trim().toLowerCase() === data.name.toLowerCase());
+      if (clash) fail(`${clash.name} is already a part of this toy.`);
+    }
     if (spec.path === 'processes') {
       const toy = await activeParent(Toy, merged.toyId, 'Toy'); await activeParent(ToyType, id(toy.typeId), 'Category'); data.toyId = id(merged.toyId);
       if (previous.toyId && id(previous.toyId) !== data.toyId && (await ProductionEntry.find({ processId: id(previous) })).length) fail('A used process cannot be moved to another toy.');

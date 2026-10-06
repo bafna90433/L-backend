@@ -363,3 +363,25 @@ test('HTTP a damaged part belongs to a toy, and the same name on another toy is 
   assert.equal((await request('admin', 'POST', '/damage-parts', { name: 'Wheel', toyId: 'nope' })).status, 404);
   assert.equal((await request('admin', 'POST', '/damage-parts', { name: 'Wheel', toyId: 'toy' })).status, 200);
 });
+
+test('HTTP the same part name cannot be added to a toy twice', async t => {
+  const { request, data } = await setup(t);
+  assert.equal((await request('admin', 'POST', '/damage-parts', { name: 'Top part', toyId: 'toy' })).status, 200);
+
+  // Same toy, same name in any casing or spacing — refused.
+  for (const name of ['Top part', 'TOP PART', '  top Part ']) {
+    const again = await request('admin', 'POST', '/damage-parts', { name, toyId: 'toy' });
+    assert.equal(again.status, 400);
+    assert.match(again.body.message, /already a part of this toy/);
+  }
+  assert.equal(data.DamagePart.length, 1);
+
+  // The same name on a different toy is a different part, so it is allowed.
+  assert.equal((await request('admin', 'POST', '/damage-parts', { name: 'Top part', toyId: 'toy2' })).status, 200);
+
+  // Renaming onto a name the toy already has is refused too, but saving a part
+  // under its own name is not.
+  const second = await request('admin', 'POST', '/damage-parts', { name: 'Bottom part', toyId: 'toy' });
+  assert.equal((await request('admin', 'PUT', `/damage-parts/${second.body.id}`, { name: 'Top part' })).status, 400);
+  assert.equal((await request('admin', 'PUT', `/damage-parts/${second.body.id}`, { name: 'Bottom part' })).status, 200);
+});
