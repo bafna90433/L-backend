@@ -10,12 +10,12 @@ const clone = value => structuredClone(value);
 function fixture() {
   const data = {
     User: [
-      { _id: 'owner', name: 'MD', role: 'owner', permissions: ['*'] },
-      { _id: 'supervisor', name: 'Floor Supervisor', role: 'production-supervisor', permissions: ['production.entry'] },
-      { _id: 'admin', name: 'Production Admin', role: 'production-admin', permissions: ['production.masters', 'production.entry', 'production.reports'] },
-      { _id: 'reporter', name: 'Reporter', role: 'reporter', permissions: ['production.reports'] },
-      { _id: 'staff', name: 'Office', role: 'staff', permissions: [] },
-      { _id: 'disabled', name: 'Disabled', role: 'production-admin', permissions: ['*'], isActive: false }
+      { _id: 'owner', username: 'owner', name: 'MD', role: 'owner', permissions: ['*'] },
+      { _id: 'supervisor', username: 'supervisor', name: 'Floor Supervisor', role: 'production-supervisor', permissions: ['production.entry'] },
+      { _id: 'admin', username: 'admin', name: 'Production Admin', role: 'production-admin', permissions: ['production.masters', 'production.entry', 'production.reports'] },
+      { _id: 'reporter', username: 'reporter', name: 'Reporter', role: 'reporter', permissions: ['production.reports'] },
+      { _id: 'staff', username: 'staff', name: 'Office', role: 'staff', permissions: [] },
+      { _id: 'disabled', username: 'disabled', name: 'Disabled', role: 'production-admin', permissions: ['*'], isActive: false }
     ],
     Labour: [{ _id: 'w1', name: 'Male Worker', gender: 'Male', status: 'active', whatsapp: 'existing-phone', monthlySalary: 25000, shiftStart: '07:00', workingHours: 9 }, { _id: 'w2', name: 'Female Worker', gender: 'Female', status: 'active' }, { _id: 'old', name: 'Former Worker', gender: 'Male', status: 'inactive' }],
     ToyType: [{ _id: 'type', name: 'Friction', isActive: true }],
@@ -384,4 +384,71 @@ test('HTTP the same part name cannot be added to a toy twice', async t => {
   const second = await request('admin', 'POST', '/damage-parts', { name: 'Bottom part', toyId: 'toy' });
   assert.equal((await request('admin', 'PUT', `/damage-parts/${second.body.id}`, { name: 'Top part' })).status, 400);
   assert.equal((await request('admin', 'PUT', `/damage-parts/${second.body.id}`, { name: 'Bottom part' })).status, 200);
+});
+
+test('HTTP leave hours come straight off the shift and cap what can be recorded', async t => {
+  const { request, data } = await setup(t);
+
+  // Two hours off a seven and a half hour shift leaves five and a half.
+  const saved = await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w2', leaveMinutes: 120 });
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.availableMinutes, 330);
+  assert.equal(data.ProductionDay[0].leaveMinutes, 120);
+
+  const day = await request('owner', 'GET', '/day?date=2026-10-05');
+  const worker = day.body.workers.find(row => row.id === 'w2');
+  assert.equal(worker.leaveMinutes, 120);
+  assert.equal(worker.availableMinutes, 330);
+
+  // Work beyond what is left after the leave is refused.
+  const entry = minutes => request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w2', toyId: 'toy', processId: 'process', minutes, pieces: 10 });
+  assert.equal((await entry(331)).status, 400);
+  assert.equal((await entry(330)).status, 200);
+
+  // And leave cannot be longer than the shift itself.
+  assert.equal((await request('supervisor', 'POST', '/day', { date: '2026-10-06', labourId: 'w2', leaveMinutes: 600 })).status, 400);
+});
+
+test('HTTP one entry’s own history can be asked for, with what changed', async t => {
+  const { request } = await setup(t);
+  const made = await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w1', toyId: 'toy', processId: 'process', minutes: 240, pieces: 900 });
+  await request('admin', 'PUT', `/entries/${made.body.id}`, { pieces: 1200 });
+  await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w1', toyId: 'toy', processId: 'process', minutes: 60, pieces: 50 });
+
+  const mine = await request('owner', 'GET', `/history?entryId=${made.body.id}`);
+  assert.equal(mine.status, 200);
+  // Only this entry's own changes, newest first, and each says what moved.
+  assert.deepEqual(mine.body.history.map(row => row.action), ['entry-updated', 'entry-created']);
+  assert.equal(mine.body.history[0].before.pieces, 900);
+  assert.equal(mine.body.history[0].after.pieces, 1200);
+  assert.equal(mine.body.history[0].byName, 'Production Admin');
+
+  // Without the filter the other entry is in there too.
+  assert.ok((await request('owner', 'GET', '/history')).body.history.length > mine.body.history.length);
+});
+
+test('HTTP renaming an account carries the name onto everything it recorded', async t => {
+  const { request, data } = await setup(t);
+  await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w1', toyId: 'toy', processId: 'process', minutes: 60, pieces: 50 });
+  await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w2', leaveMinutes: 60 });
+  await request('supervisor', 'POST', '/damage', { date: '2026-10-05', toyId: 'toy', partName: 'Top part', qty: 2 });
+  assert.equal(data.ProductionEntry[0].enteredByName, 'Floor Supervisor');
+
+  assert.equal((await request('supervisor', 'POST', '/recorder-name', { username: 'supervisor', name: 'Sunil' })).status, 403);
+  assert.equal((await request('admin', 'POST', '/recorder-name', { username: 'nobody', name: 'Sunil' })).status, 404);
+  assert.equal((await request('admin', 'POST', '/recorder-name', { username: 'owner', name: 'Sunil' })).status, 403);
+
+  const done = await request('admin', 'POST', '/recorder-name', { username: 'supervisor', name: 'Sunil' });
+  assert.equal(done.status, 200);
+  assert.equal(done.body.from, 'Floor Supervisor');
+  assert.equal(data.User.find(row => row._id === 'supervisor').name, 'Sunil');
+  assert.equal(data.ProductionEntry[0].enteredByName, 'Sunil');
+  assert.equal(data.ProductionDay.find(row => row.labourId === 'w2').enteredByName, 'Sunil');
+  assert.equal(data.DamageEntry[0].enteredByName, 'Sunil');
+  assert.ok(data.ProductionLog.some(row => row.byName === 'Sunil'));
+
+  // Switching an account off is the same guarded door.
+  assert.equal((await request('admin', 'POST', '/account-active', { username: 'owner', isActive: false })).status, 403);
+  assert.equal((await request('admin', 'POST', '/account-active', { username: 'reporter', isActive: false })).status, 200);
+  assert.equal(data.User.find(row => row._id === 'reporter').isActive, false);
 });

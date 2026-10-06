@@ -224,6 +224,7 @@ const ProductionDaySchema = new mongoose.Schema({
   inTime: { type: String, default: '' },
   outTime: { type: String, default: '' },
   breakMinutes: { type: Number, default: undefined },
+  leaveMinutes: { type: Number, default: 0 },
   availableMinutes: { type: Number, default: 0 },
   note: { type: String, default: '' },
   enteredBy: { type: String, default: '' },

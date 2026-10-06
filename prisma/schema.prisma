@@ -386,6 +386,10 @@ model ProductionDay {
   outTime          String   @default("")
   breakMinutes     Int?
   /**
+   * Hours of leave taken inside the shift, in minutes.
+   */
+  leaveMinutes     Int      @default(0)
+  /**
    * Minutes actually available after a late start or an early finish.
    */
   availableMinutes Int      @default(0)

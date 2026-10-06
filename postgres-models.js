@@ -98,7 +98,7 @@ const specs = {
   },
   ProductionDay: {
     delegate: 'productionDay',
-    fields: ['date', 'labourId', 'status', 'inTime', 'outTime', 'breakMinutes', 'availableMinutes', 'note', 'enteredBy', 'enteredByName', 'createdAt', 'updatedAt']
+    fields: ['date', 'labourId', 'status', 'inTime', 'outTime', 'breakMinutes', 'leaveMinutes', 'availableMinutes', 'note', 'enteredBy', 'enteredByName', 'createdAt', 'updatedAt']
   },
   ProductionEntry: {
     delegate: 'productionEntry',

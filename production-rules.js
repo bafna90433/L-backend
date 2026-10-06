@@ -56,7 +56,10 @@ const availableMinutesFor = (worker, day) => {
   const elapsed = Math.max(0, to - from);
   const taken = day?.breakMinutes ?? breakMinutesWithin(from, to);
   const minutes = Math.max(0, elapsed - taken);
-  return day?.status === 'half' ? Math.min(minutes, Math.floor((toMinutes(shift.end) - toMinutes(shift.start) - (day?.breakMinutes ?? shift.breakMinutes)) / 2)) : minutes;
+  const capped = day?.status === 'half' ? Math.min(minutes, Math.floor((toMinutes(shift.end) - toMinutes(shift.start) - (day?.breakMinutes ?? shift.breakMinutes)) / 2)) : minutes;
+  // Leave hours come off whole: two hours off a seven and a half hour shift
+  // leaves five and a half, whatever the clock times say.
+  return Math.max(0, capped - (day?.leaveMinutes || 0));
 };
 /** The break default shown for a window, so leaving early does not deduct lunch. */
 const breakMinutesFor = (worker, inTime, outTime) => {
@@ -72,7 +75,8 @@ const attendance = (worker, body) => {
   if (end <= start) fail('Departure must be after arrival.');
   if (start < toMinutes(shift.start) || end > toMinutes(shift.end)) fail('Attendance must be within the worker shift.');
   const breakMinutes = integer(body.breakMinutes ?? breakMinutesWithin(start, end), 'Break minutes', end - start);
-  const result = { status, inTime, outTime, breakMinutes, note: String(body.note || '').slice(0, 200) };
+  const leaveMinutes = integer(body.leaveMinutes ?? 0, 'Leave minutes', Math.max(0, end - start - breakMinutes));
+  const result = { status, inTime, outTime, breakMinutes, leaveMinutes, note: String(body.note || '').slice(0, 200) };
   result.availableMinutes = availableMinutesFor(worker, result);
   return result;
 };

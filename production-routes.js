@@ -180,6 +180,37 @@ function createProductionRouter(options = {}) {
     await audit(req, 'damage-deleted', `Removed damage of ${before.qty} ${before.partName} on ${before.toyName}`, before, null, id(before));
     return { ok: true };
   }, true));
+  // Every saved record keeps the name as it stood at the time, so changing an
+  // account's name has to move those snapshots with it, or the floor sees two
+  // people where there is one. Owner accounts are out of reach from here.
+  const liveAccount = async username => {
+    const account = await User.findOne({ username: String(username || '').trim() });
+    if (!account) fail('That account was not found.', 404);
+    if (account.role === 'owner') fail('An owner account cannot be changed from here.', 403);
+    return account;
+  };
+  router.post('/recorder-name', auth, admin, handle(async req => {
+    const name = String(req.body?.name || '').trim().slice(0, 80);
+    if (!name) fail('Send the new name.');
+    const account = await liveAccount(req.body?.username);
+    const from = String(account.name || '').trim();
+    await User.findByIdAndUpdate(id(account), { name });
+    let records = 0;
+    if (from && from !== name) {
+      for (const [model, field] of [[ProductionEntry, 'enteredByName'], [ProductionDay, 'enteredByName'], [DamageEntry, 'enteredByName'], [ProductionLog, 'byName']]) {
+        for (const row of await model.find({ [field]: from })) { await model.findByIdAndUpdate(id(row), { [field]: name }); records += 1; }
+      }
+    }
+    await audit(req, 'recorder-renamed', `${from || 'An account'} is now ${name} on ${records} records`);
+    return { from, to: name, records };
+  }, true));
+  router.post('/account-active', auth, admin, handle(async req => {
+    const account = await liveAccount(req.body?.username);
+    const isActive = req.body?.isActive !== false;
+    await User.findByIdAndUpdate(id(account), { isActive });
+    await audit(req, isActive ? 'account-enabled' : 'account-disabled', `${account.name || account.username} was switched ${isActive ? 'on' : 'off'}`);
+    return { username: account.username, isActive };
+  }, true));
   router.get('/masters', auth, read, handle(async () => {
     const [types, toys, processes, workers, damageParts] = await Promise.all([ToyType.find({}), Toy.find({}), ToyProcess.find({}), Labour.find({}), DamagePart.find({})]);
     const schedules = await trainingSchedules();
@@ -301,7 +332,7 @@ function createProductionRouter(options = {}) {
     const schedules = await trainingSchedules();
     return { date: dayKey(date), workers: workers.filter(row => row.status === 'active').map(worker => {
       const day = days.find(row => id(row.labourId) === id(worker)), logged = entries.filter(row => id(row.labourId) === id(worker));
-      return { ...workerView(worker), isTraining: rules.isTrainingOn(schedules.get(id(worker)), date), status: day?.status || 'present', inTime: day?.inTime || shiftFor(worker).start, outTime: day?.outTime || shiftFor(worker).end, breakMinutes: day?.breakMinutes ?? rules.breakMinutesFor(worker, day?.inTime, day?.outTime), availableMinutes: day?.availableMinutes ?? availableMinutesFor(worker, day), workedMinutes: logged.reduce((sum, row) => sum + row.minutes, 0), pieces: logged.reduce((sum, row) => sum + row.pieces, 0), note: day?.note || '' };
+      return { ...workerView(worker), isTraining: rules.isTrainingOn(schedules.get(id(worker)), date), status: day?.status || 'present', inTime: day?.inTime || shiftFor(worker).start, outTime: day?.outTime || shiftFor(worker).end, breakMinutes: day?.breakMinutes ?? rules.breakMinutesFor(worker, day?.inTime, day?.outTime), leaveMinutes: day?.leaveMinutes || 0, availableMinutes: day?.availableMinutes ?? availableMinutesFor(worker, day), workedMinutes: logged.reduce((sum, row) => sum + row.minutes, 0), pieces: logged.reduce((sum, row) => sum + row.pieces, 0), note: day?.note || '' };
     }).sort((a, b) => a.name.localeCompare(b.name)), entries: viewEntries(entries, workers, toys, processes, types, schedules).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) };
   }));
   router.post('/day', auth, write, handle(async req => {
@@ -393,9 +424,11 @@ function createProductionRouter(options = {}) {
     const limit = req.query.limit === undefined ? 60 : Number(req.query.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) fail('History limit must be between 1 and 200.');
     const filter = {};
+    // One entry's own story, for the owner opening a record that was corrected.
+    if (req.query.entryId) filter.entryId = String(req.query.entryId);
     if (req.query.from || req.query.to) filter.at = { ...(req.query.from ? { $gte: dayStart(req.query.from) } : {}), ...(req.query.to ? { $lte: dayEnd(req.query.to) } : {}) };
     const rows = await ProductionLog.find(filter);
-    return { history: rows.sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, limit).map(row => ({ id: id(row), action: row.action, summary: row.summary, byName: row.byName, at: row.at, entryId: row.entryId || '', before: row.before, after: row.after })) };
+    return { history: rows.sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, limit).map(row => ({ id: id(row), action: row.action, summary: row.summary, byName: row.byName, at: row.at, entryId: row.entryId || '', before: row.before || null, after: row.after || null })) };
   }));
   return router;
 }
