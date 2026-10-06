@@ -21,7 +21,7 @@ function fixture() {
     ToyType: [{ _id: 'type', name: 'Friction', isActive: true }],
     Toy: [{ _id: 'toy', name: 'Bird', typeId: 'type', isActive: true }, { _id: 'toy2', name: 'Fish', typeId: 'type', isActive: true }],
     ToyProcess: [{ _id: 'process', name: 'Body assembly', toyId: 'toy', isActive: true }, { _id: 'process2', name: 'Wheel joint', toyId: 'toy2', isActive: true }],
-    ProductionDay: [], ProductionEntry: [], ProductionLog: [], SystemSettings: []
+    ProductionDay: [], ProductionEntry: [], ProductionLog: [], DamageEntry: [], SystemSettings: []
   };
   let seq = 0, failAudit = false, tail = Promise.resolve();
   const matches = (row, where) => Object.entries(where).every(([key, value]) => {
@@ -244,4 +244,62 @@ test('HTTP report names who broke a record, and refuses one set in a short burst
   ]);
   assert.equal(records[0].improvement, 11);
   assert.equal(records[0].processName, 'Body assembly');
+});
+
+test('HTTP entries carry a work type, and one marked training stays out of the ranking while still counting as output', async t => {
+  const { request, data } = await setup(t);
+
+  assert.equal((await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w1', toyId: 'toy', processId: 'process', minutes: 120, pieces: 100, workType: 'sleeping' })).status, 400);
+
+  const plain = await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w1', toyId: 'toy', processId: 'process', minutes: 120, pieces: 100 });
+  assert.equal(plain.status, 200);
+  assert.equal(data.ProductionEntry.at(-1).workType, 'regular');
+
+  assert.equal((await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w2', toyId: 'toy2', processId: 'process2', minutes: 120, pieces: 40, workType: 'training' })).status, 200);
+  assert.equal((await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w2', toyId: 'toy', processId: 'process', minutes: 120, pieces: 60, workType: 'cover' })).status, 200);
+
+  const report = await request('owner', 'GET', '/report?from=2026-10-05&to=2026-10-05');
+  assert.equal(report.status, 200);
+  // Training counts in the factory total, and a worker's row keeps the two
+  // apart: pieces is everything they did, regular is what they are judged on.
+  assert.equal(report.body.totals.pieces, 200);
+  assert.equal(report.body.trainingTotals.pieces, 40);
+  const learner = report.body.workers.find(row => row.id === 'w2');
+  assert.equal(learner.pieces, 100);
+  assert.equal(learner.regular.pieces, 60);
+  assert.equal(learner.training.pieces, 40);
+  assert.deepEqual([...new Set(report.body.entries.map(row => row.workType))].sort(), ['cover', 'regular', 'training']);
+});
+
+test('HTTP damage is recorded on its own, remembers the names typed before and is refused when empty', async t => {
+  const { request, data } = await setup(t);
+
+  for (const bad of [{ toyName: '', partName: 'Top part', qty: 5 }, { toyName: 'C-1 Pullback car', partName: '', qty: 5 }, { toyName: 'C-1 Pullback car', partName: 'Top part', qty: 0 }]) {
+    assert.equal((await request('supervisor', 'POST', '/damage', { date: '2026-10-06', ...bad })).status, 400);
+  }
+
+  const made = await request('supervisor', 'POST', '/damage', { date: '2026-10-06', toyName: '  C-1 Pullback car ', partName: 'Top part', qty: 5 });
+  assert.equal(made.status, 200);
+  assert.equal(data.DamageEntry[0].toyName, 'C-1 Pullback car');
+  assert.equal(data.DamageEntry[0].enteredByName, 'Floor Supervisor');
+  assert.equal(data.ProductionLog.at(-1).action, 'damage-recorded');
+
+  assert.equal((await request('supervisor', 'POST', '/damage', { date: '2026-10-05', toyName: 'Hen', partName: 'Beak', qty: 2 })).status, 200);
+
+  const list = await request('owner', 'GET', '/damage?from=2026-10-01&to=2026-10-06');
+  assert.equal(list.status, 200);
+  assert.equal(list.body.total, 7);
+  // Newest first, and both names come back for the next person to pick.
+  assert.deepEqual(list.body.entries.map(row => row.date), ['2026-10-06', '2026-10-05']);
+  assert.deepEqual(list.body.toyNames, ['C-1 Pullback car', 'Hen']);
+  assert.deepEqual(list.body.partNames, ['Beak', 'Top part']);
+
+  // A range that holds nothing still offers every name ever typed.
+  const empty = await request('owner', 'GET', '/damage?from=2026-09-01&to=2026-09-02');
+  assert.equal(empty.body.entries.length, 0);
+  assert.deepEqual(empty.body.toyNames, ['C-1 Pullback car', 'Hen']);
+
+  assert.equal((await request('owner', 'POST', '/damage', { date: '2026-10-06', toyName: 'X', partName: 'Y', qty: 1 })).status, 403);
+  assert.equal((await request('supervisor', 'DELETE', `/damage/${made.body.id}`)).status, 200);
+  assert.equal(data.DamageEntry.length, 1);
 });

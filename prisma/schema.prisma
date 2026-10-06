@@ -412,6 +412,10 @@ model ProductionEntry {
   minutes       Int      @default(0)
   pieces        Int      @default(0)
   note          String   @default("")
+  /**
+   * regular, training or cover — how this piece of work should be read.
+   */
+  workType      String   @default("regular")
   enteredBy     String   @default("")
   enteredByName String   @default("")
   createdAt     DateTime @default(now())
@@ -429,6 +433,23 @@ model ProductionEntry {
 /**
  * Every change kept, so a corrected number can always be traced back.
  */
+model DamageEntry {
+  id            String   @id @default(uuid())
+  date          DateTime
+  /**
+   * Typed by hand, and kept so it can be picked again next time.
+   */
+  toyName       String
+  partName      String
+  qty           Int      @default(0)
+  enteredBy     String   @default("")
+  enteredByName String   @default("")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now())
+
+  @@index([date])
+}
+
 model ProductionLog {
   id      String   @id @default(uuid())
   entryId String   @default("")

@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const rules = require('./production-rules');
-const { id, plain, fail, shiftFor, dayKey, dayStart, dayEnd, integer, availableMinutesFor, attendance, readEntry, rate, performanceFlags, recordBreaks, standingRecords } = rules;
+const { id, plain, fail, shiftFor, dayKey, dayStart, dayEnd, integer, availableMinutesFor, attendance, readEntry, readDamage, rate, performanceFlags, recordBreaks, standingRecords } = rules;
 const { productionModels, transaction } = require('./production-storage');
 const { initializeCatalogue } = require('./scripts/seed-production-masters');
 const SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
@@ -10,7 +10,7 @@ function createProductionRouter(options = {}) {
   const models = options.models || productionModels(require('./models'));
   const resolveAccess = options.resolveAccess || require('./access-control').resolveUserAccess;
   const atomic = options.transaction || transaction;
-  const { User, Labour, ToyType, Toy, ToyProcess, ProductionDay, ProductionEntry, ProductionLog, SystemSettings } = models;
+  const { User, Labour, ToyType, Toy, ToyProcess, ProductionDay, ProductionEntry, ProductionLog, DamageEntry, SystemSettings } = models;
   const router = express.Router();
   // Shift and break times are stored, not compiled in, so the office can change
   // them. Re-read briefly rather than per request: every handler needs them.
@@ -103,6 +103,34 @@ function createProductionRouter(options = {}) {
     const hours = shiftHours();
     await audit(req, 'shifts-updated', `Shift times set to male ${value.shifts.Male.start}–${value.shifts.Male.end} (${hours.Male} hr) and female ${value.shifts.Female.start}–${value.shifts.Female.end} (${hours.Female} hr), ${value.breaks.length} breaks`, before, value);
     return { ...rules.shiftSettings(), hours, labels: { Male: shiftFor({ gender: 'Male' }).label, Female: shiftFor({ gender: 'Female' }).label } };
+  }, true));
+  // Damage stands apart from production: no worker, no work step, and the two
+  // names are typed. Names already used come back with the list so the next
+  // person picks instead of inventing a second spelling.
+  router.get('/damage', auth, read, handle(async req => {
+    const to = dayEnd(req.query.to), from = req.query.from ? dayStart(req.query.from) : dayStart(new Date(dayStart(to).getTime() - 29 * 86400000));
+    if (from > to) fail('Choose a valid damage range.');
+    const [range, everything] = await Promise.all([DamageEntry.find({ date: { $gte: from, $lte: to } }), DamageEntry.find({})]);
+    const names = key => [...new Set(everything.map(row => row[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    return {
+      from: dayKey(from), to: dayKey(to),
+      entries: range.map(row => ({ id: id(row), date: dayKey(row.date), toyName: row.toyName, partName: row.partName, qty: row.qty, enteredByName: row.enteredByName || '', createdAt: row.createdAt }))
+        .sort((a, b) => b.date.localeCompare(a.date) || new Date(b.createdAt) - new Date(a.createdAt)),
+      total: range.reduce((sum, row) => sum + row.qty, 0),
+      toyNames: names('toyName'), partNames: names('partName')
+    };
+  }));
+  router.post('/damage', auth, write, handle(async req => {
+    const data = readDamage(req.body || {});
+    const created = await DamageEntry.create({ ...data, enteredBy: id(req.user), enteredByName: req.user.name, createdAt: new Date(), updatedAt: new Date() });
+    await audit(req, 'damage-recorded', `${data.toyName} — ${data.partName} — ${data.qty} damaged`, null, created, id(created));
+    return { id: id(created) };
+  }, true));
+  router.delete('/damage/:id', auth, write, handle(async req => {
+    const before = await get(DamageEntry, req.params.id, 'Damage record');
+    await DamageEntry.deleteOne({ _id: req.params.id });
+    await audit(req, 'damage-deleted', `Removed damage of ${before.qty} ${before.partName} on ${before.toyName}`, before, null, id(before));
+    return { ok: true };
   }, true));
   router.get('/masters', auth, read, handle(async () => {
     const [types, toys, processes, workers] = await Promise.all([ToyType.find({}), Toy.find({}), ToyProcess.find({}), Labour.find({})]);
@@ -201,7 +229,7 @@ function createProductionRouter(options = {}) {
   }, true));
   const viewEntries = (entries, workers, toys, processes, types = [], schedules = new Map()) => {
     const wm = new Map(workers.map(row => [id(row), row])), tm = new Map(toys.map(row => [id(row), row])), pm = new Map(processes.map(row => [id(row), row])), cm = new Map(types.map(row => [id(row), row]));
-    return entries.map(row => ({ id: id(row), date: dayKey(row.date), labourId: id(row.labourId), workerName: wm.get(id(row.labourId))?.name || 'Archived worker', toyId: id(row.toyId), toyName: tm.get(id(row.toyId))?.name || 'Archived toy', typeId: id(tm.get(id(row.toyId))?.typeId), typeName: cm.get(id(tm.get(id(row.toyId))?.typeId))?.name || '', processId: id(row.processId), processName: pm.get(id(row.processId))?.name || 'Archived process', minutes: row.minutes, pieces: row.pieces, note: row.note || '', enteredByName: row.enteredByName || '', enteredBy: id(row.enteredBy), createdAt: row.createdAt, updatedAt: row.updatedAt, isTraining: rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) }));
+    return entries.map(row => ({ id: id(row), date: dayKey(row.date), labourId: id(row.labourId), workerName: wm.get(id(row.labourId))?.name || 'Archived worker', toyId: id(row.toyId), toyName: tm.get(id(row.toyId))?.name || 'Archived toy', typeId: id(tm.get(id(row.toyId))?.typeId), typeName: cm.get(id(tm.get(id(row.toyId))?.typeId))?.name || '', processId: id(row.processId), processName: pm.get(id(row.processId))?.name || 'Archived process', minutes: row.minutes, pieces: row.pieces, workType: row.workType || 'regular', note: row.note || '', enteredByName: row.enteredByName || '', enteredBy: id(row.enteredBy), createdAt: row.createdAt, updatedAt: row.updatedAt, isTraining: rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) }));
   };
   router.get('/day', auth, read, handle(async req => {
     const date = dayStart(req.query.date), filter = { date: { $gte: date, $lte: dayEnd(date) } };
@@ -264,7 +292,9 @@ function createProductionRouter(options = {}) {
     // Read all earlier days for a baseline; current/future days never enter it.
     const [history, dayRows, workers, toys, processes, types] = await Promise.all([ProductionEntry.find({ date: { $lte: to } }), ProductionDay.find({ date: { $gte: from, $lte: to } }), Labour.find({}), Toy.find({}), ToyProcess.find({}), ToyType.find({})]);
     const schedules = await trainingSchedules();
-    const classify = row => ({ ...plain(row), isTraining: rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) });
+    // An entry marked training counts as training whatever the worker's dates
+    // say, and a worker inside their training window still does.
+    const classify = row => ({ ...plain(row), isTraining: row.workType === 'training' || rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) });
     const entries = history.filter(row => new Date(row.date) >= from), wm = new Map(workers.map(row => [id(row), row])), tm = new Map(toys.map(row => [id(row), row])), pm = new Map(processes.map(row => [id(row), row]));
     const trend = new Map(), byWorker = new Map(), byToy = new Map(), byProcess = new Map();
     for (let n = 0; n < days; n++) { const date = dayKey(new Date(from.getTime() + n * 86400000)); trend.set(date, { date, pieces: 0, minutes: 0, workers: new Set() }); }

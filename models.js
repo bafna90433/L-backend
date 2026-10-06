@@ -242,6 +242,7 @@ const ProductionEntrySchema = new mongoose.Schema({
   minutes: { type: Number, default: 0 },
   pieces: { type: Number, default: 0 },
   note: { type: String, default: '' },
+  workType: { type: String, default: 'regular' },
   enteredBy: { type: String, default: '' },
   enteredByName: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now },
@@ -262,12 +263,27 @@ const ProductionLogSchema = new mongoose.Schema({
   at: { type: Date, default: Date.now }
 });
 
+// Damage is logged on its own, not against a production entry: a broken part
+// is found in a box, long after whoever made it has moved on.
+const DamageEntrySchema = new mongoose.Schema({
+  date: { type: Date, required: true },
+  toyName: { type: String, required: true },
+  partName: { type: String, required: true },
+  qty: { type: Number, default: 0 },
+  enteredBy: { type: String, default: '' },
+  enteredByName: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+DamageEntrySchema.index({ date: 1 });
+
 const ToyType = mongoose.model('ToyType', ToyTypeSchema);
 const Toy = mongoose.model('Toy', ToySchema);
 const ToyProcess = mongoose.model('ToyProcess', ToyProcessSchema);
 const ProductionDay = mongoose.model('ProductionDay', ProductionDaySchema);
 const ProductionEntry = mongoose.model('ProductionEntry', ProductionEntrySchema);
 const ProductionLog = mongoose.model('ProductionLog', ProductionLogSchema);
+const DamageEntry = mongoose.model('DamageEntry', DamageEntrySchema);
 
 const SystemSettings = mongoose.model('SystemSettings', SystemSettingsSchema);
 const DeletedLog = mongoose.model('DeletedLog', DeletedLogSchema);
@@ -289,6 +305,7 @@ module.exports = {
   ToyProcess,
   ProductionDay,
   ProductionEntry,
-  ProductionLog
+  ProductionLog,
+  DamageEntry
 };
 }

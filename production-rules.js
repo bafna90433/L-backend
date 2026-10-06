@@ -109,11 +109,17 @@ const readShiftSettings = body => {
   }
   return { shifts, breaks };
 };
+// How a piece of work should be read. Training is somebody learning the job;
+// cover is somebody standing in on a job that is not theirs. Both are real
+// output, but only training is kept out of the rankings and records.
+const WORK_TYPES = ['regular', 'training', 'cover'];
 const readEntry = body => {
   if (!body.labourId || !body.toyId || !body.processId) fail('Pick the worker, toy and process.');
   const minutes = integer(body.minutes, 'Minutes', 1440);
   if (!minutes) fail('Minutes must be greater than zero.');
-  return { date: dayStart(body.date), labourId: id(body.labourId), toyId: id(body.toyId), processId: id(body.processId), minutes, pieces: integer(body.pieces, 'Pieces'), note: String(body.note || '').slice(0, 200) };
+  const workType = body.workType === undefined || body.workType === null || body.workType === '' ? 'regular' : String(body.workType);
+  if (!WORK_TYPES.includes(workType)) fail('Work type must be regular, training or cover.');
+  return { date: dayStart(body.date), labourId: id(body.labourId), toyId: id(body.toyId), processId: id(body.processId), minutes, pieces: integer(body.pieces, 'Pieces'), note: String(body.note || '').slice(0, 200), workType };
 };
 const rate = (pieces, minutes) => minutes ? Math.round(pieces * 600 / minutes) / 10 : 0;
 const readTrainingDates = (body, previous = {}) => {
@@ -197,4 +203,20 @@ const standingRecords = entries => {
   }
   return [...best.values()].sort((a, b) => b.rawRate - a.rawRate);
 };
-module.exports = { SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesFor, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, availableMinutesFor, attendance, readEntry, rate, performanceFlags, recordBreaks, standingRecords, readTrainingDates, isTrainingOn };
+/**
+ * A damage record stands on its own: a date, what toy, which part and how many.
+ *
+ * The two names are typed by hand because a broken part is often not a step in
+ * the catalogue, and tying this to a production entry would mean nothing could
+ * be logged once the shift it came from was closed.
+ */
+const readDamage = body => {
+  const toyName = String(body.toyName || '').trim().slice(0, 100);
+  const partName = String(body.partName || '').trim().slice(0, 100);
+  if (!toyName) fail('Type the toy name.');
+  if (!partName) fail('Type the damaged part.');
+  const qty = integer(body.qty, 'Damage qty', 1000000);
+  if (!qty) fail('Damage qty must be greater than zero.');
+  return { date: dayStart(body.date), toyName, partName, qty };
+};
+module.exports = { WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesFor, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, availableMinutesFor, attendance, readEntry, readDamage, rate, performanceFlags, recordBreaks, standingRecords, readTrainingDates, isTrainingOn };
