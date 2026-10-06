@@ -21,7 +21,7 @@ function fixture() {
     ToyType: [{ _id: 'type', name: 'Friction', isActive: true }],
     Toy: [{ _id: 'toy', name: 'Bird', typeId: 'type', isActive: true }, { _id: 'toy2', name: 'Fish', typeId: 'type', isActive: true }],
     ToyProcess: [{ _id: 'process', name: 'Body assembly', toyId: 'toy', isActive: true }, { _id: 'process2', name: 'Wheel joint', toyId: 'toy2', isActive: true }],
-    ProductionDay: [], ProductionEntry: [], ProductionLog: [], DamageEntry: [], SystemSettings: []
+    ProductionDay: [], ProductionEntry: [], ProductionLog: [], DamageEntry: [], DamagePart: [], SystemSettings: []
   };
   let seq = 0, failAudit = false, tail = Promise.resolve();
   const matches = (row, where) => Object.entries(where).every(([key, value]) => {
@@ -292,7 +292,19 @@ test('HTTP damage is recorded on its own, remembers the names typed before and i
   // Newest first, and both names come back for the next person to pick.
   assert.deepEqual(list.body.entries.map(row => row.date), ['2026-10-06', '2026-10-05']);
   assert.deepEqual(list.body.toyNames, ['C-1 Pullback car', 'Hen']);
-  assert.deepEqual(list.body.partNames, ['Beak', 'Top part']);
+  // A part typed on the floor becomes a master row that can be picked again.
+  assert.deepEqual(list.body.parts.map(row => row.name), ['Beak', 'Top part']);
+  assert.equal(data.DamagePart.length, 2);
+
+  // Typing the same part again reuses the row rather than making a second one.
+  assert.equal((await request('supervisor', 'POST', '/damage', { date: '2026-10-06', toyName: 'Hen', partName: 'beak', qty: 1 })).status, 200);
+  assert.equal(data.DamagePart.length, 2);
+
+  // Renaming the part in the office renames it on every record that used it.
+  const beak = data.DamagePart.find(row => row.name === 'Beak');
+  assert.equal((await request('admin', 'PUT', `/damage-parts/${beak._id}`, { name: 'Beak tip' })).status, 200);
+  const renamed = await request('owner', 'GET', '/damage?from=2026-10-01&to=2026-10-06');
+  assert.deepEqual([...new Set(renamed.body.entries.map(row => row.partName))].sort(), ['Beak tip', 'Top part']);
 
   // A range that holds nothing still offers every name ever typed.
   const empty = await request('owner', 'GET', '/damage?from=2026-09-01&to=2026-09-02');
@@ -301,5 +313,5 @@ test('HTTP damage is recorded on its own, remembers the names typed before and i
 
   assert.equal((await request('owner', 'POST', '/damage', { date: '2026-10-06', toyName: 'X', partName: 'Y', qty: 1 })).status, 403);
   assert.equal((await request('supervisor', 'DELETE', `/damage/${made.body.id}`)).status, 200);
-  assert.equal(data.DamageEntry.length, 1);
+  assert.equal(data.DamageEntry.length, 2);
 });

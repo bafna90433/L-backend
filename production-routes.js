@@ -10,7 +10,7 @@ function createProductionRouter(options = {}) {
   const models = options.models || productionModels(require('./models'));
   const resolveAccess = options.resolveAccess || require('./access-control').resolveUserAccess;
   const atomic = options.transaction || transaction;
-  const { User, Labour, ToyType, Toy, ToyProcess, ProductionDay, ProductionEntry, ProductionLog, DamageEntry, SystemSettings } = models;
+  const { User, Labour, ToyType, Toy, ToyProcess, ProductionDay, ProductionEntry, ProductionLog, DamageEntry, DamagePart, SystemSettings } = models;
   const router = express.Router();
   // Shift and break times are stored, not compiled in, so the office can change
   // them. Re-read briefly rather than per request: every handler needs them.
@@ -107,21 +107,42 @@ function createProductionRouter(options = {}) {
   // Damage stands apart from production: no worker, no work step, and the two
   // names are typed. Names already used come back with the list so the next
   // person picks instead of inventing a second spelling.
+  // A part typed on the floor becomes a master row, so the next person picks it
+  // and the office can rename it in one place.
+  const partFor = async body => {
+    const parts = await DamagePart.find({});
+    if (body.partId) {
+      const picked = parts.find(row => id(row) === id(body.partId) && row.isActive !== false);
+      if (!picked) fail('That damaged part is not in the list.');
+      return picked;
+    }
+    const typed = String(body.partName || '').trim().slice(0, 100);
+    if (!typed) fail('Type or choose the damaged part.');
+    const existing = parts.find(row => row.name.trim().toLowerCase() === typed.toLowerCase());
+    if (existing) {
+      if (existing.isActive === false) await DamagePart.findByIdAndUpdate(id(existing), { isActive: true });
+      return existing;
+    }
+    return DamagePart.create({ name: typed, isActive: true, createdAt: new Date() });
+  };
   router.get('/damage', auth, read, handle(async req => {
     const to = dayEnd(req.query.to), from = req.query.from ? dayStart(req.query.from) : dayStart(new Date(dayStart(to).getTime() - 29 * 86400000));
     if (from > to) fail('Choose a valid damage range.');
-    const [range, everything] = await Promise.all([DamageEntry.find({ date: { $gte: from, $lte: to } }), DamageEntry.find({})]);
-    const names = key => [...new Set(everything.map(row => row[key]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    const [range, everything, parts] = await Promise.all([DamageEntry.find({ date: { $gte: from, $lte: to } }), DamageEntry.find({}), DamagePart.find({})]);
+    // The master name wins, so renaming a part renames it everywhere it was used.
+    const partName = row => parts.find(part => id(part) === id(row.partId))?.name || row.partName;
     return {
       from: dayKey(from), to: dayKey(to),
-      entries: range.map(row => ({ id: id(row), date: dayKey(row.date), toyName: row.toyName, partName: row.partName, qty: row.qty, enteredByName: row.enteredByName || '', createdAt: row.createdAt }))
+      entries: range.map(row => ({ id: id(row), date: dayKey(row.date), toyName: row.toyName, partId: id(row.partId), partName: partName(row), qty: row.qty, enteredByName: row.enteredByName || '', createdAt: row.createdAt }))
         .sort((a, b) => b.date.localeCompare(a.date) || new Date(b.createdAt) - new Date(a.createdAt)),
       total: range.reduce((sum, row) => sum + row.qty, 0),
-      toyNames: names('toyName'), partNames: names('partName')
+      toyNames: [...new Set(everything.map(row => row.toyName).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+      parts: parts.filter(row => row.isActive !== false).map(row => ({ id: id(row), name: row.name })).sort((a, b) => a.name.localeCompare(b.name))
     };
   }));
   router.post('/damage', auth, write, handle(async req => {
-    const data = readDamage(req.body || {});
+    const part = await partFor(req.body || {});
+    const data = { ...readDamage({ ...req.body, partName: part.name }), partId: id(part), partName: part.name };
     const created = await DamageEntry.create({ ...data, enteredBy: id(req.user), enteredByName: req.user.name, createdAt: new Date(), updatedAt: new Date() });
     await audit(req, 'damage-recorded', `${data.toyName} — ${data.partName} — ${data.qty} damaged`, null, created, id(created));
     return { id: id(created) };
@@ -133,7 +154,7 @@ function createProductionRouter(options = {}) {
     return { ok: true };
   }, true));
   router.get('/masters', auth, read, handle(async () => {
-    const [types, toys, processes, workers] = await Promise.all([ToyType.find({}), Toy.find({}), ToyProcess.find({}), Labour.find({})]);
+    const [types, toys, processes, workers, damageParts] = await Promise.all([ToyType.find({}), Toy.find({}), ToyProcess.find({}), Labour.find({}), DamagePart.find({})]);
     const schedules = await trainingSchedules();
     const trainingWorkerView = worker => ({ ...workerView(worker), ...rules.readTrainingDates({}, schedules.get(id(worker))), isTraining: rules.isTrainingOn(schedules.get(id(worker)), dayKey()) });
     const typeIds = new Set(types.filter(row => row.isActive !== false).map(id));
@@ -145,6 +166,9 @@ function createProductionRouter(options = {}) {
       processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0 })),
       workers: workers.filter(row => row.status === 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       archivedWorkers: workers.filter(row => row.status !== 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
+      // The parts the floor has typed, so the office can rename them in one
+      // place and the app can offer them as a list.
+      damageParts: damageParts.filter(row => row.isActive !== false).map(row => ({ id: id(row), name: row.name })).sort((a, b) => a.name.localeCompare(b.name)),
       // Shift lengths travel with the catalogue so a shift target can be
       // labelled with the hours it is actually for, not a figure from before
       // breaks were taken off.
@@ -185,7 +209,8 @@ function createProductionRouter(options = {}) {
   const specs = [
     { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder'] },
     { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId'] },
-    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId'] }
+    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId'] },
+    { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name'] }
   ];
   const masterData = async (spec, body, previous = {}) => {
     const data = {};

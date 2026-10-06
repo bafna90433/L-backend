@@ -263,11 +263,20 @@ const ProductionLogSchema = new mongoose.Schema({
   at: { type: Date, default: Date.now }
 });
 
+// Damaged parts are their own small catalogue. A part is born the first time
+// the floor types it, and lives on so it can be picked and renamed later.
+const DamagePartSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
 // Damage is logged on its own, not against a production entry: a broken part
 // is found in a box, long after whoever made it has moved on.
 const DamageEntrySchema = new mongoose.Schema({
   date: { type: Date, required: true },
   toyName: { type: String, required: true },
+  partId: { type: String, default: '' },
   partName: { type: String, required: true },
   qty: { type: Number, default: 0 },
   enteredBy: { type: String, default: '' },
@@ -284,6 +293,7 @@ const ProductionDay = mongoose.model('ProductionDay', ProductionDaySchema);
 const ProductionEntry = mongoose.model('ProductionEntry', ProductionEntrySchema);
 const ProductionLog = mongoose.model('ProductionLog', ProductionLogSchema);
 const DamageEntry = mongoose.model('DamageEntry', DamageEntrySchema);
+const DamagePart = mongoose.model('DamagePart', DamagePartSchema);
 
 const SystemSettings = mongoose.model('SystemSettings', SystemSettingsSchema);
 const DeletedLog = mongoose.model('DeletedLog', DeletedLogSchema);
@@ -306,6 +316,7 @@ module.exports = {
   ProductionDay,
   ProductionEntry,
   ProductionLog,
-  DamageEntry
+  DamageEntry,
+  DamagePart
 };
 }

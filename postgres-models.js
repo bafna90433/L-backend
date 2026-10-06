@@ -108,9 +108,13 @@ const specs = {
       processId: { relation: 'process', model: 'ToyProcess' }
     }
   },
+  DamagePart: {
+    delegate: 'damagePart',
+    fields: ['name', 'isActive', 'createdAt']
+  },
   DamageEntry: {
     delegate: 'damageEntry',
-    fields: ['date', 'toyName', 'partName', 'qty', 'enteredBy', 'enteredByName', 'createdAt', 'updatedAt']
+    fields: ['date', 'toyName', 'partId', 'partName', 'qty', 'enteredBy', 'enteredByName', 'createdAt', 'updatedAt']
   },
   ProductionLog: {
     delegate: 'productionLog',
@@ -435,6 +439,7 @@ module.exports = {
   ProductionDay: createModel('ProductionDay'),
   ProductionEntry: createModel('ProductionEntry'),
   DamageEntry: createModel('DamageEntry'),
+  DamagePart: createModel('DamagePart'),
   ProductionLog: createModel('ProductionLog'),
   __testing: { specs, translateWhere, cleanData, uniqueWhereForUpsert }
 };

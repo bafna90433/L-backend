@@ -433,6 +433,13 @@ model ProductionEntry {
 /**
  * Every change kept, so a corrected number can always be traced back.
  */
+model DamagePart {
+  id        String   @id @default(uuid())
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
 model DamageEntry {
   id            String   @id @default(uuid())
   date          DateTime
@@ -440,6 +447,7 @@ model DamageEntry {
    * Typed by hand, and kept so it can be picked again next time.
    */
   toyName       String
+  partId        String   @default("")
   partName      String
   qty           Int      @default(0)
   enteredBy     String   @default("")
