@@ -109,7 +109,7 @@ function createProductionRouter(options = {}) {
   // person picks instead of inventing a second spelling.
   // A part typed on the floor becomes a master row, so the next person picks it
   // and the office can rename it in one place.
-  const partFor = async body => {
+  const partFor = async (body, toyId) => {
     const parts = await DamagePart.find({});
     if (body.partId) {
       const picked = parts.find(row => id(row) === id(body.partId) && row.isActive !== false);
@@ -118,13 +118,36 @@ function createProductionRouter(options = {}) {
     }
     const typed = String(body.partName || '').trim().slice(0, 100);
     if (!typed) fail('Type or choose the damaged part.');
-    const existing = parts.find(row => row.name.trim().toLowerCase() === typed.toLowerCase());
+    // The same part name on two different toys is two different parts.
+    const existing = parts.find(row => row.name.trim().toLowerCase() === typed.toLowerCase() && (!toyId || !id(row.toyId) || id(row.toyId) === toyId));
     if (existing) {
-      if (existing.isActive === false) await DamagePart.findByIdAndUpdate(id(existing), { isActive: true });
+      const fixes = {};
+      if (existing.isActive === false) fixes.isActive = true;
+      if (toyId && !id(existing.toyId)) fixes.toyId = toyId;
+      if (Object.keys(fixes).length) return DamagePart.findByIdAndUpdate(id(existing), fixes, { new: true });
       return existing;
     }
-    return DamagePart.create({ name: typed, isActive: true, createdAt: new Date() });
+    return DamagePart.create({ name: typed, toyId: toyId || '', isActive: true, createdAt: new Date() });
   };
+  // Damage recorded before parts had a master kept the name as loose text.
+  // This adopts those names into the list once, so nothing the floor already
+  // reported is lost when the list arrives.
+  router.post('/damage-parts/adopt', auth, admin, handle(async req => {
+    const [entries, parts] = await Promise.all([DamageEntry.find({}), DamagePart.find({})]);
+    const byName = new Map(parts.map(row => [row.name.trim().toLowerCase(), row]));
+    let added = 0, linked = 0;
+    for (const row of entries) {
+      if (row.partId) continue;
+      const name = String(row.partName || '').trim();
+      if (!name) continue;
+      let part = byName.get(name.toLowerCase());
+      if (!part) { part = await DamagePart.create({ name, isActive: true, createdAt: new Date() }); byName.set(name.toLowerCase(), part); added += 1; }
+      await DamageEntry.findByIdAndUpdate(id(row), { partId: id(part), partName: part.name, updatedAt: new Date() });
+      linked += 1;
+    }
+    if (linked) await audit(req, 'damage-parts-imported', `Imported ${added} part names from ${linked} earlier damage records`);
+    return { added, linked };
+  }, true));
   router.get('/damage', auth, read, handle(async req => {
     const to = dayEnd(req.query.to), from = req.query.from ? dayStart(req.query.from) : dayStart(new Date(dayStart(to).getTime() - 29 * 86400000));
     if (from > to) fail('Choose a valid damage range.');
@@ -137,12 +160,16 @@ function createProductionRouter(options = {}) {
         .sort((a, b) => b.date.localeCompare(a.date) || new Date(b.createdAt) - new Date(a.createdAt)),
       total: range.reduce((sum, row) => sum + row.qty, 0),
       toyNames: [...new Set(everything.map(row => row.toyName).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
-      parts: parts.filter(row => row.isActive !== false).map(row => ({ id: id(row), name: row.name })).sort((a, b) => a.name.localeCompare(b.name))
+      parts: parts.filter(row => row.isActive !== false).map(row => ({ id: id(row), name: row.name, toyId: id(row.toyId) })).sort((a, b) => a.name.localeCompare(b.name))
     };
   }));
   router.post('/damage', auth, write, handle(async req => {
-    const part = await partFor(req.body || {});
-    const data = { ...readDamage({ ...req.body, partName: part.name }), partId: id(part), partName: part.name };
+    const body = req.body || {};
+    // The toy is picked from the catalogue, so its name is taken from there
+    // rather than from whatever the phone sent.
+    const toy = body.toyId ? await activeParent(Toy, body.toyId, 'Toy') : null;
+    const part = await partFor(body, toy ? id(toy) : '');
+    const data = { ...readDamage({ ...body, toyName: toy ? toy.name : body.toyName, partName: part.name }), partId: id(part), partName: part.name };
     const created = await DamageEntry.create({ ...data, enteredBy: id(req.user), enteredByName: req.user.name, createdAt: new Date(), updatedAt: new Date() });
     await audit(req, 'damage-recorded', `${data.toyName} — ${data.partName} — ${data.qty} damaged`, null, created, id(created));
     return { id: id(created) };
@@ -168,7 +195,7 @@ function createProductionRouter(options = {}) {
       archivedWorkers: workers.filter(row => row.status !== 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       // The parts the floor has typed, so the office can rename them in one
       // place and the app can offer them as a list.
-      damageParts: damageParts.filter(row => row.isActive !== false).map(row => ({ id: id(row), name: row.name })).sort((a, b) => a.name.localeCompare(b.name)),
+      damageParts: damageParts.filter(row => row.isActive !== false).map(row => ({ id: id(row), name: row.name, toyId: id(row.toyId), toyName: toys.find(toy => id(toy) === id(row.toyId))?.name || '' })).sort((a, b) => a.toyName.localeCompare(b.toyName) || a.name.localeCompare(b.name)),
       // Shift lengths travel with the catalogue so a shift target can be
       // labelled with the hours it is actually for, not a figure from before
       // breaks were taken off.
@@ -210,7 +237,7 @@ function createProductionRouter(options = {}) {
     { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder'] },
     { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId'] },
     { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId'] },
-    { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name'] }
+    { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name', 'toyId'] }
   ];
   const masterData = async (spec, body, previous = {}) => {
     const data = {};
@@ -223,6 +250,9 @@ function createProductionRouter(options = {}) {
       if (data[field] !== undefined && (typeof data[field] !== 'number' || !Number.isFinite(data[field]) || data[field] < 0)) fail('Target must be a nonnegative number.');
     }
     if (spec.path === 'toys') { await activeParent(ToyType, merged.typeId, 'Category'); data.typeId = id(merged.typeId); if (data.code !== undefined) data.code = String(data.code).slice(0, 50); }
+    // Parts adopted from old records have no toy, and renaming one of those
+    // must not be blocked by a toy it never had.
+    if (spec.path === 'damage-parts') { if (merged.toyId) { await activeParent(Toy, merged.toyId, 'Toy'); data.toyId = id(merged.toyId); } else data.toyId = ''; }
     if (spec.path === 'processes') {
       const toy = await activeParent(Toy, merged.toyId, 'Toy'); await activeParent(ToyType, id(toy.typeId), 'Category'); data.toyId = id(merged.toyId);
       if (previous.toyId && id(previous.toyId) !== data.toyId && (await ProductionEntry.find({ processId: id(previous) })).length) fail('A used process cannot be moved to another toy.');

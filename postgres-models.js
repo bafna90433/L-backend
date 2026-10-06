@@ -110,7 +110,7 @@ const specs = {
   },
   DamagePart: {
     delegate: 'damagePart',
-    fields: ['name', 'isActive', 'createdAt']
+    fields: ['name', 'toyId', 'isActive', 'createdAt']
   },
   DamageEntry: {
     delegate: 'damageEntry',

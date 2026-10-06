@@ -267,6 +267,7 @@ const ProductionLogSchema = new mongoose.Schema({
 // the floor types it, and lives on so it can be picked and renamed later.
 const DamagePartSchema = new mongoose.Schema({
   name: { type: String, required: true },
+  toyId: { type: String, default: '' },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });

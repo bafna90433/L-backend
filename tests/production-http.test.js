@@ -315,3 +315,51 @@ test('HTTP damage is recorded on its own, remembers the names typed before and i
   assert.equal((await request('supervisor', 'DELETE', `/damage/${made.body.id}`)).status, 200);
   assert.equal(data.DamageEntry.length, 2);
 });
+
+test('HTTP damage parts recorded before the list existed are adopted into it', async t => {
+  const { request, data } = await setup(t);
+  // Two old records, saved when a part was only loose text, one pair matching
+  // apart from its capitals.
+  data.DamageEntry.push(
+    { _id: 'old1', date: dayStart('2026-10-01'), toyName: 'Fighter Jet', partName: 'Gearbox', qty: 10, enteredByName: 'Floor Supervisor', createdAt: new Date() },
+    { _id: 'old2', date: dayStart('2026-10-02'), toyName: '2196 Car', partName: 'gearbox', qty: 4, enteredByName: 'Floor Supervisor', createdAt: new Date() },
+    { _id: 'old3', date: dayStart('2026-10-02'), toyName: 'Hen', partName: 'Beak', qty: 2, enteredByName: 'Floor Supervisor', createdAt: new Date() }
+  );
+
+  assert.equal((await request('supervisor', 'POST', '/damage-parts/adopt', {})).status, 403);
+  const first = await request('admin', 'POST', '/damage-parts/adopt', {});
+  assert.equal(first.status, 200);
+  assert.deepEqual(first.body, { added: 2, linked: 3 });
+  assert.deepEqual(data.DamagePart.map(row => row.name).sort(), ['Beak', 'Gearbox']);
+  // The second spelling joined the first part rather than making its own.
+  assert.equal(data.DamageEntry.find(row => row._id === 'old2').partName, 'Gearbox');
+
+  // Running it again has nothing left to do.
+  assert.deepEqual((await request('admin', 'POST', '/damage-parts/adopt', {})).body, { added: 0, linked: 0 });
+});
+
+test('HTTP a damaged part belongs to a toy, and the same name on another toy is its own part', async t => {
+  const { request, data } = await setup(t);
+
+  // Named through the catalogue, so the toy's name comes from the catalogue.
+  const first = await request('supervisor', 'POST', '/damage', { date: '2026-10-06', toyId: 'toy', partName: 'Gearbox', qty: 4 });
+  assert.equal(first.status, 200);
+  const made = data.DamageEntry.at(-1);
+  assert.equal(made.toyName, 'Bird');
+  assert.equal(data.DamagePart.at(-1).toyId, 'toy');
+
+  // The same part name on a second toy is a second part, not the first one.
+  assert.equal((await request('supervisor', 'POST', '/damage', { date: '2026-10-06', toyId: 'toy2', partName: 'Gearbox', qty: 2 })).status, 200);
+  assert.equal(data.DamagePart.length, 2);
+  assert.deepEqual(data.DamagePart.map(row => row.toyId), ['toy', 'toy2']);
+
+  // Reporting it again on the first toy reuses the first part.
+  assert.equal((await request('supervisor', 'POST', '/damage', { date: '2026-10-06', toyId: 'toy', partName: 'gearbox', qty: 1 })).status, 200);
+  assert.equal(data.DamagePart.length, 2);
+
+  const masters = await request('owner', 'GET', '/masters');
+  assert.deepEqual(masters.body.damageParts.map(row => [row.name, row.toyName]), [['Gearbox', 'Bird'], ['Gearbox', 'Fish']]);
+
+  assert.equal((await request('admin', 'POST', '/damage-parts', { name: 'Wheel', toyId: 'nope' })).status, 404);
+  assert.equal((await request('admin', 'POST', '/damage-parts', { name: 'Wheel', toyId: 'toy' })).status, 200);
+});
