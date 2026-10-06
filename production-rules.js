@@ -116,10 +116,21 @@ const readEntry = body => {
   return { date: dayStart(body.date), labourId: id(body.labourId), toyId: id(body.toyId), processId: id(body.processId), minutes, pieces: integer(body.pieces, 'Pieces'), note: String(body.note || '').slice(0, 200) };
 };
 const rate = (pieces, minutes) => minutes ? Math.round(pieces * 600 / minutes) / 10 : 0;
+const readTrainingDates = (body, previous = {}) => {
+  const start = body.trainingStart ?? previous.trainingStart ?? '', end = body.trainingEnd ?? previous.trainingEnd ?? '';
+  if (!start && !end) return { trainingStart: '', trainingEnd: '' };
+  if (!start || !end) fail('Training start and end dates are both required.');
+  const trainingStart = dayKey(start), trainingEnd = dayKey(end);
+  if (trainingEnd < trainingStart) fail('Training end must be on or after its start.');
+  return { trainingStart, trainingEnd };
+};
+const isTrainingOn = (schedule, date) => !!schedule?.trainingStart && !!schedule?.trainingEnd && dayKey(date) >= schedule.trainingStart && dayKey(date) <= schedule.trainingEnd;
 // Group a whole day before comparing, and never include that day or future days.
 const performanceFlags = entries => {
   const groups = new Map();
   for (const row of entries) {
+    // Training contributes to factory output, never to the comparison baseline.
+    if (row.isTraining) continue;
     const key = `${id(row.labourId)}|${id(row.toyId)}|${id(row.processId)}|${dayKey(row.date)}`;
     const group = groups.get(key) || { date: dayKey(row.date), workerId: id(row.labourId), toyId: id(row.toyId), processId: id(row.processId), minutes: 0, pieces: 0 };
     group.minutes += row.minutes; group.pieces += row.pieces; groups.set(key, group);
@@ -135,4 +146,55 @@ const performanceFlags = entries => {
   }
   return flags;
 };
-module.exports = { SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesFor, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, availableMinutesFor, attendance, readEntry, rate, performanceFlags };
+/**
+ * Days where somebody beat the best rate ever recorded for that toy and work
+ * step.
+ *
+ * One day's work on one step counts as one attempt, so a record cannot be set
+ * by splitting an entry. A standing best must already exist, or the first
+ * person to ever do a job would always be breaking a record, and a short burst
+ * cannot set one: an hour is the least that shows a rate anybody can hold.
+ */
+const RECORD_MIN_MINUTES = 60;
+const dailyAttempts = entries => {
+  const groups = new Map();
+  for (const row of entries) {
+    if (row.isTraining) continue;
+    const key = `${id(row.labourId)}|${id(row.toyId)}|${id(row.processId)}|${dayKey(row.date)}`;
+    const group = groups.get(key) || { date: dayKey(row.date), workerId: id(row.labourId), toyId: id(row.toyId), processId: id(row.processId), minutes: 0, pieces: 0 };
+    group.minutes += row.minutes; group.pieces += row.pieces; groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => a.date.localeCompare(b.date) || a.workerId.localeCompare(b.workerId));
+};
+const recordBreaks = entries => {
+  const groups = { values: () => dailyAttempts(entries) };
+  const best = new Map(), breaks = [];
+  for (const row of groups.values()) {
+    if (row.minutes < RECORD_MIN_MINUTES) continue;
+    const key = `${row.toyId}|${row.processId}`;
+    const rawRate = row.pieces * 60 / row.minutes, standing = best.get(key);
+    if (standing && rawRate > standing.rawRate) {
+      breaks.push({
+        date: row.date, workerId: row.workerId, toyId: row.toyId, processId: row.processId,
+        minutes: row.minutes, hours: row.minutes / 60, pieces: row.pieces, rate: rate(row.pieces, row.minutes),
+        previousRate: rate(standing.pieces, standing.minutes), previousWorkerId: standing.workerId, previousDate: standing.date,
+        improvement: Math.round((rawRate / standing.rawRate - 1) * 100)
+      });
+    }
+    if (!standing || rawRate > standing.rawRate) best.set(key, { rawRate, pieces: row.pieces, minutes: row.minutes, workerId: row.workerId, date: row.date });
+  }
+  return breaks;
+};
+/** The best rate standing on each toy and work step, and who holds it. */
+const standingRecords = entries => {
+  const best = new Map();
+  for (const row of dailyAttempts(entries)) {
+    if (row.minutes < RECORD_MIN_MINUTES) continue;
+    const key = `${row.toyId}|${row.processId}`;
+    const rawRate = row.pieces * 60 / row.minutes, standing = best.get(key);
+    if (!standing || rawRate > standing.rawRate) best.set(key, { ...row, rawRate, hours: row.minutes / 60, rate: rate(row.pieces, row.minutes), attempts: (standing?.attempts || 0) + 1 });
+    else best.set(key, { ...standing, attempts: standing.attempts + 1 });
+  }
+  return [...best.values()].sort((a, b) => b.rawRate - a.rawRate);
+};
+module.exports = { SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesFor, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, availableMinutesFor, attendance, readEntry, rate, performanceFlags, recordBreaks, standingRecords, readTrainingDates, isTrainingOn };

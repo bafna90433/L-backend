@@ -1,7 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const rules = require('./production-rules');
-const { id, plain, fail, shiftFor, dayKey, dayStart, dayEnd, integer, availableMinutesFor, attendance, readEntry, rate, performanceFlags } = rules;
+const { id, plain, fail, shiftFor, dayKey, dayStart, dayEnd, integer, availableMinutesFor, attendance, readEntry, rate, performanceFlags, recordBreaks, standingRecords } = rules;
 const { productionModels, transaction } = require('./production-storage');
 const { initializeCatalogue } = require('./scripts/seed-production-masters');
 const SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123';
@@ -15,6 +15,17 @@ function createProductionRouter(options = {}) {
   // Shift and break times are stored, not compiled in, so the office can change
   // them. Re-read briefly rather than per request: every handler needs them.
   const SHIFT_KEY = 'production.shifts';
+  // Production-only metadata: never added to the shared worker/payroll response.
+  const TRAINING_PREFIX = 'production.training.';
+  const trainingSchedules = async () => new Map((SystemSettings ? await SystemSettings.find({}) : []).filter(row => row.key.startsWith(TRAINING_PREFIX)).map(row => [row.key.slice(TRAINING_PREFIX.length), row.value || {}]));
+  const saveTraining = async (worker, body, previous = {}) => {
+    const schedule = rules.readTrainingDates(body, previous);
+    if (body.trainingStart === undefined && body.trainingEnd === undefined) return schedule;
+    if (!SystemSettings) fail('Training settings are not available on this server.');
+    const key = `${TRAINING_PREFIX}${id(worker)}`;
+    await SystemSettings.findOneAndUpdate({ key }, { key, value: schedule }, { upsert: true, new: true });
+    return schedule;
+  };
   let shiftsReadAt = 0;
   const loadShifts = async () => {
     if (!SystemSettings || Date.now() - shiftsReadAt < 15000) return;
@@ -95,14 +106,17 @@ function createProductionRouter(options = {}) {
   }, true));
   router.get('/masters', auth, read, handle(async () => {
     const [types, toys, processes, workers] = await Promise.all([ToyType.find({}), Toy.find({}), ToyProcess.find({}), Labour.find({})]);
+    const schedules = await trainingSchedules();
+    const trainingWorkerView = worker => ({ ...workerView(worker), ...rules.readTrainingDates({}, schedules.get(id(worker))), isTraining: rules.isTrainingOn(schedules.get(id(worker)), dayKey()) });
     const typeIds = new Set(types.filter(row => row.isActive !== false).map(id));
     const activeToys = toys.filter(row => row.isActive !== false && typeIds.has(id(row.typeId))), toyIds = new Set(activeToys.map(id));
     return {
+      features: { training: true, multiWork: true },
       types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0 })),
       toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0 })),
       processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0 })),
-      workers: workers.filter(row => row.status === 'active').map(workerView).sort((a, b) => a.name.localeCompare(b.name)),
-      archivedWorkers: workers.filter(row => row.status !== 'active').map(workerView).sort((a, b) => a.name.localeCompare(b.name)),
+      workers: workers.filter(row => row.status === 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
+      archivedWorkers: workers.filter(row => row.status !== 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       // Shift lengths travel with the catalogue so a shift target can be
       // labelled with the hours it is actually for, not a figure from before
       // breaks were taken off.
@@ -116,17 +130,24 @@ function createProductionRouter(options = {}) {
     return { name: name.slice(0, 100), gender, empCode: String(body.empCode ?? previous?.empCode ?? '').trim().slice(0, 50), department: String(body.department ?? previous?.department ?? '').trim().slice(0, 100) };
   };
   router.post('/workers', auth, admin, handle(async req => {
+    rules.readTrainingDates(req.body || {});
     const data = workerData(req.body || {}), shift = shiftFor(data);
     const worker = await Labour.create({ ...data, status: 'active', employeeType: 'labourer', whatsapp: '', monthlySalary: 0, shiftStart: shift.start, shiftEnd: shift.end, workingHours: availableMinutesFor(data) / 60 });
-    await audit(req, 'worker-created', `Added worker "${worker.name}"`, null, workerView(worker));
-    return workerView(worker);
+    const schedule = await saveTraining(worker, req.body || {});
+    const result = { ...workerView(worker), ...schedule };
+    await audit(req, 'worker-created', `Added worker "${worker.name}"`, null, result);
+    return result;
   }, true));
   router.put('/workers/:id', auth, admin, handle(async req => {
     const before = await get(Labour, req.params.id, 'Worker');
+    const previous = (await trainingSchedules()).get(id(before));
+    rules.readTrainingDates(req.body || {}, previous);
     // Payroll/contact and attendance fields on existing Labour rows are preserved.
     const worker = await Labour.findByIdAndUpdate(req.params.id, workerData(req.body || {}, before), { new: true });
-    await audit(req, 'worker-updated', `Edited worker "${worker.name}"`, workerView(before), workerView(worker));
-    return workerView(worker);
+    const schedule = await saveTraining(worker, req.body || {}, previous);
+    const result = { ...workerView(worker), ...schedule };
+    await audit(req, 'worker-updated', `Edited worker "${worker.name}"`, { ...workerView(before), ...previous }, result);
+    return result;
   }, true));
   router.delete('/workers/:id', auth, admin, handle(async req => {
     const before = await get(Labour, req.params.id, 'Worker'), after = await Labour.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
@@ -178,17 +199,18 @@ function createProductionRouter(options = {}) {
     await audit(req, 'catalogue-initialized', 'Initialized editable photo catalogue (existing rows preserved)', null, result);
     return result;
   }, true));
-  const viewEntries = (entries, workers, toys, processes, types = []) => {
+  const viewEntries = (entries, workers, toys, processes, types = [], schedules = new Map()) => {
     const wm = new Map(workers.map(row => [id(row), row])), tm = new Map(toys.map(row => [id(row), row])), pm = new Map(processes.map(row => [id(row), row])), cm = new Map(types.map(row => [id(row), row]));
-    return entries.map(row => ({ id: id(row), date: dayKey(row.date), labourId: id(row.labourId), workerName: wm.get(id(row.labourId))?.name || 'Archived worker', toyId: id(row.toyId), toyName: tm.get(id(row.toyId))?.name || 'Archived toy', typeId: id(tm.get(id(row.toyId))?.typeId), typeName: cm.get(id(tm.get(id(row.toyId))?.typeId))?.name || '', processId: id(row.processId), processName: pm.get(id(row.processId))?.name || 'Archived process', minutes: row.minutes, pieces: row.pieces, note: row.note || '', enteredByName: row.enteredByName || '', enteredBy: id(row.enteredBy), createdAt: row.createdAt, updatedAt: row.updatedAt }));
+    return entries.map(row => ({ id: id(row), date: dayKey(row.date), labourId: id(row.labourId), workerName: wm.get(id(row.labourId))?.name || 'Archived worker', toyId: id(row.toyId), toyName: tm.get(id(row.toyId))?.name || 'Archived toy', typeId: id(tm.get(id(row.toyId))?.typeId), typeName: cm.get(id(tm.get(id(row.toyId))?.typeId))?.name || '', processId: id(row.processId), processName: pm.get(id(row.processId))?.name || 'Archived process', minutes: row.minutes, pieces: row.pieces, note: row.note || '', enteredByName: row.enteredByName || '', enteredBy: id(row.enteredBy), createdAt: row.createdAt, updatedAt: row.updatedAt, isTraining: rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) }));
   };
   router.get('/day', auth, read, handle(async req => {
     const date = dayStart(req.query.date), filter = { date: { $gte: date, $lte: dayEnd(date) } };
     const [days, entries, workers, toys, processes, types] = await Promise.all([ProductionDay.find(filter), ProductionEntry.find(filter), Labour.find({}), Toy.find({}), ToyProcess.find({}), ToyType.find({})]);
+    const schedules = await trainingSchedules();
     return { date: dayKey(date), workers: workers.filter(row => row.status === 'active').map(worker => {
       const day = days.find(row => id(row.labourId) === id(worker)), logged = entries.filter(row => id(row.labourId) === id(worker));
-      return { ...workerView(worker), status: day?.status || 'present', inTime: day?.inTime || shiftFor(worker).start, outTime: day?.outTime || shiftFor(worker).end, breakMinutes: day?.breakMinutes ?? rules.breakMinutesFor(worker, day?.inTime, day?.outTime), availableMinutes: day?.availableMinutes ?? availableMinutesFor(worker, day), workedMinutes: logged.reduce((sum, row) => sum + row.minutes, 0), pieces: logged.reduce((sum, row) => sum + row.pieces, 0), note: day?.note || '' };
-    }).sort((a, b) => a.name.localeCompare(b.name)), entries: viewEntries(entries, workers, toys, processes, types).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) };
+      return { ...workerView(worker), isTraining: rules.isTrainingOn(schedules.get(id(worker)), date), status: day?.status || 'present', inTime: day?.inTime || shiftFor(worker).start, outTime: day?.outTime || shiftFor(worker).end, breakMinutes: day?.breakMinutes ?? rules.breakMinutesFor(worker, day?.inTime, day?.outTime), availableMinutes: day?.availableMinutes ?? availableMinutesFor(worker, day), workedMinutes: logged.reduce((sum, row) => sum + row.minutes, 0), pieces: logged.reduce((sum, row) => sum + row.pieces, 0), note: day?.note || '' };
+    }).sort((a, b) => a.name.localeCompare(b.name)), entries: viewEntries(entries, workers, toys, processes, types, schedules).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) };
   }));
   router.post('/day', auth, write, handle(async req => {
     const body = req.body || {}, worker = await activeWorker(body.labourId), date = dayStart(body.date);
@@ -241,6 +263,8 @@ function createProductionRouter(options = {}) {
     const days = Math.round((dayStart(to) - from) / 86400000) + 1;
     // Read all earlier days for a baseline; current/future days never enter it.
     const [history, dayRows, workers, toys, processes, types] = await Promise.all([ProductionEntry.find({ date: { $lte: to } }), ProductionDay.find({ date: { $gte: from, $lte: to } }), Labour.find({}), Toy.find({}), ToyProcess.find({}), ToyType.find({})]);
+    const schedules = await trainingSchedules();
+    const classify = row => ({ ...plain(row), isTraining: rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) });
     const entries = history.filter(row => new Date(row.date) >= from), wm = new Map(workers.map(row => [id(row), row])), tm = new Map(toys.map(row => [id(row), row])), pm = new Map(processes.map(row => [id(row), row]));
     const trend = new Map(), byWorker = new Map(), byToy = new Map(), byProcess = new Map();
     for (let n = 0; n < days; n++) { const date = dayKey(new Date(from.getTime() + n * 86400000)); trend.set(date, { date, pieces: 0, minutes: 0, workers: new Set() }); }
@@ -250,19 +274,25 @@ function createProductionRouter(options = {}) {
       add(byWorker, id(row.labourId), row); add(byToy, id(row.toyId), row); add(byProcess, id(row.processId), row);
     }
     const measure = total => ({ pieces: total.pieces, minutes: total.minutes, hours: Math.round(total.minutes / 6) / 10, perHour: rate(total.pieces, total.minutes) });
-    const flags = performanceFlags(history).filter(row => row.date >= dayKey(from)).map(row => ({ ...row, workerName: wm.get(row.workerId)?.name || 'Archived worker', toyName: tm.get(row.toyId)?.name || 'Archived toy', processName: pm.get(row.processId)?.name || 'Archived process' })).sort((a, b) => b.date.localeCompare(a.date) || b.drop - a.drop);
+    const flags = performanceFlags(history.map(classify)).filter(row => row.date >= dayKey(from)).map(row => ({ ...row, workerName: wm.get(row.workerId)?.name || 'Archived worker', toyName: tm.get(row.toyId)?.name || 'Archived toy', processName: pm.get(row.processId)?.name || 'Archived process' })).sort((a, b) => b.date.localeCompare(a.date) || b.drop - a.drop);
+    const records = recordBreaks(history.map(classify)).filter(row => row.date >= dayKey(from)).map(row => ({ ...row, workerName: wm.get(row.workerId)?.name || 'Archived worker', previousWorkerName: wm.get(row.previousWorkerId)?.name || 'Archived worker', toyName: tm.get(row.toyId)?.name || 'Archived toy', processName: pm.get(row.processId)?.name || 'Archived process' })).sort((a, b) => b.date.localeCompare(a.date) || b.improvement - a.improvement);
+    const recordBoard = standingRecords(history.map(classify)).map(row => ({ ...row, workerName: wm.get(row.workerId)?.name || 'Archived worker', toyName: tm.get(row.toyId)?.name || 'Archived toy', processName: pm.get(row.processId)?.name || 'Archived process' }));
     const total = entries.reduce((sum, row) => ({ pieces: sum.pieces + row.pieces, minutes: sum.minutes + row.minutes }), { pieces: 0, minutes: 0 });
+    const subtotal = rows => ({ ...measure(rows.reduce((sum, row) => ({ pieces: sum.pieces + row.pieces, minutes: sum.minutes + row.minutes }), { pieces: 0, minutes: 0 })), entries: rows.length, workers: new Set(rows.map(row => id(row.labourId))).size });
+    const training = entries.filter(row => classify(row).isTraining), regular = entries.filter(row => !classify(row).isTraining);
     return {
       from: dayKey(from), to: dayKey(to), days, quantityKind: 'process-pieces', totals: { ...measure(total), entries: entries.length, workers: byWorker.size },
-      entries: viewEntries(entries, workers, toys, processes, types).sort((a, b) => b.date.localeCompare(a.date) || new Date(b.createdAt) - new Date(a.createdAt)),
+      trainingTotals: subtotal(training), regularTotals: subtotal(regular),
+      trainingWorkers: [...byWorker.keys()].filter(key => training.some(row => id(row.labourId) === key)).map(key => ({ id: key, name: wm.get(key)?.name || 'Archived worker', ...subtotal(training.filter(row => id(row.labourId) === key)), ...schedules.get(key) })),
+      entries: viewEntries(entries, workers, toys, processes, types, schedules).sort((a, b) => b.date.localeCompare(a.date) || new Date(b.createdAt) - new Date(a.createdAt)),
       trend: [...trend.values()].map(row => ({ date: row.date, ...measure(row), workers: row.workers.size })),
       workers: [...byWorker].map(([key, total]) => {
         const available = [...total.dates].reduce((sum, date) => { const row = dayRows.find(row => dayKey(row.date) === date && id(row.labourId) === key); return sum + (row?.availableMinutes ?? availableMinutesFor(wm.get(key), row)); }, 0);
-        return { id: key, name: wm.get(key)?.name || 'Archived worker', gender: wm.get(key)?.gender || 'Male', ...measure(total), daysWorked: total.dates.size, loggedPercent: available ? Math.round(total.minutes / available * 100) : null };
+        return { id: key, name: wm.get(key)?.name || 'Archived worker', gender: wm.get(key)?.gender || 'Male', ...measure(total), regular: subtotal(regular.filter(row => id(row.labourId) === key)), training: subtotal(training.filter(row => id(row.labourId) === key)), daysWorked: total.dates.size, loggedPercent: available ? Math.round(total.minutes / available * 100) : null };
       }).sort((a, b) => b.pieces - a.pieces),
       toys: [...byToy].map(([key, total]) => ({ id: key, name: tm.get(key)?.name || 'Archived toy', ...measure(total) })).sort((a, b) => b.pieces - a.pieces),
       processes: [...byProcess].map(([key, total]) => ({ id: key, name: pm.get(key)?.name || 'Archived process', toyId: id(pm.get(key)?.toyId), toyName: tm.get(id(pm.get(key)?.toyId))?.name || 'Archived toy', ...measure(total) })).sort((a, b) => b.pieces - a.pieces),
-      flags, todayFlags: flags.filter(row => row.date === dayKey(to)).length, processCount: byProcess.size
+      records, recordBoard, flags, todayFlags: flags.filter(row => row.date === dayKey(to)).length, processCount: byProcess.size
     };
   }));
   router.get('/history', auth, read, handle(async req => {

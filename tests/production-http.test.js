@@ -60,6 +60,50 @@ async function setup(t) {
   return { ...f, request, entry };
 }
 
+test('HTTP multi-work day keeps all three tasks and shares one cumulative time budget', async t => {
+  const {request,entry,data}=await setup(t);
+  data.Toy.push({_id:'lizard',name:'Lizard',typeId:'type',isActive:true});
+  data.ToyProcess.push({_id:'lizard-body',name:'Body assembly',toyId:'lizard',isActive:true},{_id:'bird-gear',name:'Gearbox joint',toyId:'toy',isActive:true});
+  for(const work of [{toyId:'toy2',processId:'process2',minutes:240},{toyId:'lizard',processId:'lizard-body',minutes:120},{toyId:'toy',processId:'bird-gear',minutes:90}]) assert.equal((await request('supervisor','POST','/entries',entry({...work,labourId:'w2'}))).status,200);
+  const day=(await request('supervisor','GET','/day?date=2026-10-05')).body;
+  assert.equal(day.entries.length,3);assert.equal(day.workers.find(row=>row.id==='w2').workedMinutes,450);
+  assert.equal((await request('supervisor','POST','/entries',entry({labourId:'w2',minutes:1}))).status,400);
+  assert.equal(data.ProductionLog.filter(row=>row.action==='entry-created').length,3);
+});
+test('HTTP training dates are production-only, validated, preserved and audited atomically', async t => {
+  const {request,data,setFailAudit}=await setup(t);
+  const schedule={trainingStart:'2026-10-05',trainingEnd:'2026-10-08'};
+  assert.equal((await request('supervisor','PUT','/workers/w1',schedule)).status,403);
+  for(const invalid of [{trainingStart:'2026-02-30',trainingEnd:'2026-10-08'},{trainingStart:'2026-10-09',trainingEnd:'2026-10-08'},{trainingStart:'2026-10-05'}]) assert.equal((await request('admin','PUT','/workers/w1',invalid)).status,400);
+  assert.equal((await request('admin','PUT','/workers/w1',schedule)).status,200);
+  assert.equal(data.Labour[0].trainingStart,undefined); // Shared payroll/worker response stays unchanged.
+  assert.equal(data.ProductionLog.at(-1).after.trainingEnd,schedule.trainingEnd);
+  await request('admin','PUT','/workers/w1',{name:'Renamed'});
+  assert.equal((await request('admin','GET','/masters')).body.workers.find(row=>row.id==='w1').trainingEnd,schedule.trainingEnd);
+  setFailAudit(true);
+  assert.equal((await request('admin','PUT','/workers/w1',{trainingEnd:'2026-10-09'})).status,500);
+  assert.equal(data.SystemSettings.find(row=>row.key==='production.training.w1').value.trainingEnd,schedule.trainingEnd);
+  setFailAudit(false);
+  const created=await request('admin','POST','/workers',{name:'New trainee',gender:'Male',...schedule});
+  assert.equal(created.status,200);assert.equal(created.body.trainingStart,schedule.trainingStart);
+});
+test('HTTP training output remains in totals but never flags or pollutes the regular baseline', async t => {
+  const {request,entry,data}=await setup(t);
+  await request('admin','PUT','/workers/w1',{trainingStart:'2026-10-01',trainingEnd:'2026-10-04'});
+  for(const [date,pieces] of [['2026-10-01',10000],['2026-10-04',1],['2026-10-05',100],['2026-10-06',40]]) data.ProductionEntry.push({_id:date,...entry({date:dayStart(date),pieces}),createdAt:new Date()});
+  const report=(await request('owner','GET','/report?from=2026-10-01&to=2026-10-06')).body;
+  assert.equal(report.totals.pieces,10141);assert.equal(report.trainingTotals.pieces,10001);assert.equal(report.regularTotals.pieces,140);
+  assert.equal(report.trainingTotals.hours,2);assert.equal(report.trainingWorkers[0].name,'Male Worker');
+  assert.equal(report.flags.length,1);assert.equal(report.flags[0].date,'2026-10-06');assert.equal(report.flags[0].usualRate,100);assert.equal(report.flags[0].baselineDays,1);
+  assert.equal(report.entries.find(row=>row.date==='2026-10-04').isTraining,true);
+  assert.equal(report.entries.find(row=>row.date==='2026-10-05').isTraining,false);
+  assert.equal((await request('supervisor','GET','/day?date=2026-10-04')).body.workers.find(row=>row.id==='w1').isTraining,true);
+  assert.equal((await request('supervisor','GET','/day?date=2026-10-05')).body.workers.find(row=>row.id==='w1').isTraining,false);
+  assert.equal((await request('owner','GET','/report?from=2026-10-01&to=2026-10-04')).body.flags.length,0);
+  await request('admin','DELETE','/workers/w1');
+  assert.equal((await request('owner','GET','/report?from=2026-10-01&to=2026-10-04')).body.trainingTotals.pieces,10001);
+});
+
 test('HTTP permission matrix makes owner/report-only read-only and admin masters-only writes', async t => {
   const { request, entry } = await setup(t);
   assert.equal((await request(null, 'GET', '/masters')).status, 401);
@@ -178,4 +222,26 @@ test('HTTP shift settings are stored, applied to available hours and refused whe
 
   assert.equal((await request('admin', 'PUT', '/shifts', { shifts: { Male: { start: '09:00', end: '19:00' }, Female: { start: '10:00', end: '17:00' } }, breaks: [{ label: 'All day', from: '10:00', to: '17:00' }] })).status, 400);
   assert.equal((await request('admin', 'GET', '/shifts')).body.hours.Female, 6);
+});
+
+test('HTTP report names who broke a record, and refuses one set in a short burst or on a first attempt', async t => {
+  const { request } = await setup(t);
+  const work = (date, labourId, minutes, pieces) => request('supervisor', 'POST', '/entries', { date, labourId, toyId: 'toy', processId: 'process', minutes, pieces });
+
+  await work('2026-10-01', 'w1', 240, 800);   // first ever on this step — sets the bar, not a record
+  await work('2026-10-02', 'w2', 240, 900);   // beats it
+  await work('2026-10-03', 'w1', 240, 860);   // under the standing best
+  await work('2026-10-05', 'w1', 30, 400);    // 800/hr but half an hour — too short to count
+  await work('2026-10-06', 'w1', 240, 1000);  // beats it again
+
+  const report = await request('owner', 'GET', '/report?from=2026-10-01&to=2026-10-06');
+  assert.equal(report.status, 200);
+  const records = report.body.records;
+  assert.equal(records.length, 2);
+  assert.deepEqual(records.map(row => [row.date, row.workerName, row.rate, row.previousRate, row.previousWorkerName]), [
+    ['2026-10-06', 'Male Worker', 250, 225, 'Female Worker'],
+    ['2026-10-02', 'Female Worker', 225, 200, 'Male Worker']
+  ]);
+  assert.equal(records[0].improvement, 11);
+  assert.equal(records[0].processName, 'Body assembly');
 });
