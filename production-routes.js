@@ -358,10 +358,12 @@ function createProductionRouter(options = {}) {
     await audit(req, 'entry-deleted', `Removed production entry of ${before.pieces} pcs`, before, null, id(before));
     return { ok: true };
   }, true));
-  router.get('/report', auth, report, handle(async req => {
-    const to = dayEnd(req.query.to), requestedDays = req.query.days === undefined ? 30 : Number(req.query.days);
+  // The report is built from a plain query object so the assistant can ask
+  // for the same figures the Reports page shows, without a second route.
+  const buildReport = async (query = {}) => {
+    const to = dayEnd(query.to), requestedDays = query.days === undefined ? 30 : Number(query.days);
     if (!Number.isSafeInteger(requestedDays) || requestedDays < 1 || requestedDays > 3660) fail('Days must be between 1 and 3660.');
-    const from = req.query.from ? dayStart(req.query.from) : dayStart(new Date(dayStart(to).getTime() - (requestedDays - 1) * 86400000));
+    const from = query.from ? dayStart(query.from) : dayStart(new Date(dayStart(to).getTime() - (requestedDays - 1) * 86400000));
     if (from > to || to - from >= 3660 * 86400000) fail('Choose a valid report range up to 3660 days.');
     const days = Math.round((dayStart(to) - from) / 86400000) + 1;
     // Read all earlier days for a baseline; current/future days never enter it.
@@ -405,7 +407,89 @@ function createProductionRouter(options = {}) {
       processes: [...byProcess].map(([key, total]) => ({ id: key, name: pm.get(key)?.name || 'Archived process', toyId: id(pm.get(key)?.toyId), toyName: tm.get(id(pm.get(key)?.toyId))?.name || 'Archived toy', ...measure(total) })).sort((a, b) => b.pieces - a.pieces),
       records, recordBoard, dailyRecordBoard, dailyRecordsBroken, flags, todayFlags: flags.filter(row => row.date === dayKey(to)).length, processCount: byProcess.size
     };
-  }));
+  };
+  router.get('/report', auth, report, handle(req => buildReport(req.query)));
+/**
+   * The production assistant: a question in plain words, answered from this
+   * factory's own figures.
+   *
+   * The model is given a prepared summary rather than the raw rows — a month of
+   * entries would not fit in a prompt, and totals it has to add up itself are
+   * totals it can get wrong. It is told to answer only from that summary, so an
+   * unanswerable question gets "not in the data" instead of an invention.
+   */
+  const askRoutes = require('./ai-routes');
+  router.post('/ask', auth, report, handle(async req => {
+    const question = String(req.body?.question || '').trim();
+    if (!question) fail('Ask a question first.');
+    if (question.length > 1000) fail('Keep the question under 1000 characters.');
+
+    const to = req.body?.to || dayKey(new Date());
+    const days = Number(req.body?.days) || 30;
+    const data = await buildReport({ days: String(days), to });
+    const from = data.from;
+
+    const [damageRows, damageParts, catalogue] = await Promise.all([
+      DamageEntry.find({ date: { $gte: dayStart(from), $lte: dayEnd(to) } }),
+      DamagePart.find({}),
+      ToyProcess.find({})
+    ]);
+    const partName = row => damageParts.find(part => id(part) === id(row.partId))?.name || row.partName || 'Not recorded';
+    const damageByToy = new Map(), damageByPart = new Map();
+    for (const row of damageRows) {
+      damageByToy.set(row.toyName, (damageByToy.get(row.toyName) || 0) + row.qty);
+      const key = `${row.toyName} — ${partName(row)}`;
+      damageByPart.set(key, (damageByPart.get(key) || 0) + row.qty);
+    }
+    const targetOf = new Map(catalogue.map(step => [id(step), step.targetPerHour || 0]));
+
+    const pack = {
+      factory: 'Bafna Toys',
+      period: { from, to: data.to, days: data.days },
+      shiftHours: shiftLengths(),
+      totals: data.totals,
+      dailyTotals: data.trend.filter(row => row.pieces > 0),
+      workers: data.workers,
+      toys: data.toys,
+      workSteps: (data.processes || []).map(step => ({ ...step, targetPerHour: targetOf.get(step.id) || 0 })),
+      reviewFlags: data.flags,
+      recordsBroken: data.records,
+      standingRecords: data.recordBoard,
+      training: { totals: data.trainingTotals, workers: data.trainingWorkers },
+      damage: {
+        totalPieces: damageRows.reduce((sum, row) => sum + row.qty, 0),
+        entries: damageRows.length,
+        byToy: [...damageByToy].map(([toy, pieces]) => ({ toy, pieces })).sort((a, b) => b.pieces - a.pieces),
+        byPart: [...damageByPart].map(([part, pieces]) => ({ part, pieces })).sort((a, b) => b.pieces - a.pieces)
+      }
+    };
+
+    const enabled = await askRoutes.readEnabledProviders();
+    const wanted = String(req.body?.model || '');
+    const order = [wanted, 'claude', 'gemini', 'gpt'].filter((name, index, all) => name && all.indexOf(name) === index);
+    const model = order.find(name => askRoutes.PROVIDERS[name] && enabled[name] !== false);
+    if (!model) fail('No AI provider is switched on. Turn one on in Settings → AI Council APIs.', 503);
+
+    const instructions = [
+      'You are the production analyst for Bafna Toys, a toy factory in India.',
+      'Answer ONLY from the DATA below. If something is not in it, say so plainly and say what you would need.',
+      'Quantities are process pieces: a toy passes several work steps, so these are not finished toys. Say that when it matters.',
+      "A worker is judged against the target of the work steps they actually did, never against another worker's raw output.",
+      'Shift lengths are already net of breaks.',
+      'Give the numbers, name the people and the toys, and keep it short enough to read on a phone.',
+      req.body?.lang === 'hinglish' ? 'Reply in Hinglish: Hindi written in English letters, mixed with English words the way the office speaks.' : 'Reply in English.',
+      '',
+      `DATA (${pack.period.from} to ${pack.period.to}):`,
+      JSON.stringify(pack)
+    ].join('\n');
+
+    const lang = req.body?.lang === 'hinglish' ? 'hinglish' : 'en';
+    const history = Array.isArray(req.body?.history) ? req.body.history.slice(-8).filter(turn => turn && typeof turn.question === 'string' && typeof turn.answer === 'string').map(turn => ({ question: String(turn.question).slice(0, 1000), answer: String(turn.answer).slice(0, 4000) })) : [];
+    const answer = await askRoutes.PROVIDERS[model]({ question, lang, history, systemOverride: instructions, noSearch: true });
+    void askRoutes.recordAiUsage(model, answer.usage);
+    await audit(req, 'assistant-asked', `Asked the production assistant: ${question.slice(0, 120)}`, null, null);
+    return { answer: answer.text, model, period: pack.period, data: pack };
+  }, true));
   router.get('/history', auth, read, handle(async req => {
     const limit = req.query.limit === undefined ? 60 : Number(req.query.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) fail('History limit must be between 1 and 200.');

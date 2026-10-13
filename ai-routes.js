@@ -720,3 +720,9 @@ router.get('/auth/me', authMiddleware, async (req, res) => {
 });
 
 module.exports = router;
+// The production assistant answers from factory data with the same keys and
+// the same provider switches the AI Council uses, so there is one place to
+// configure a model and one place to switch one off.
+module.exports.PROVIDERS = PROVIDERS;
+module.exports.readEnabledProviders = readEnabled;
+module.exports.recordAiUsage = (model, usage) => aiUsage.record(model, usage);
