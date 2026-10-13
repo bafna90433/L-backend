@@ -48,39 +48,11 @@ const dayKey = value => {
 };
 const dayStart = value => new Date(`${dayKey(value)}T00:00:00.000Z`);
 const dayEnd = value => new Date(dayStart(value).getTime() + 86400000 - 1);
-const availableMinutesFor = (worker, day) => {
+// Configured shift duration is used only for catalogue target labels.
+const shiftMinutesFor = worker => {
   const shift = shiftFor(worker);
-  if (day?.status === 'leave') return 0;
-  const from = Math.max(toMinutes(day?.inTime || shift.start), toMinutes(shift.start));
-  const to = Math.min(toMinutes(day?.outTime || shift.end), toMinutes(shift.end));
-  const elapsed = Math.max(0, to - from);
-  const taken = day?.breakMinutes ?? breakMinutesWithin(from, to);
-  const minutes = Math.max(0, elapsed - taken);
-  const capped = day?.status === 'half' ? Math.min(minutes, Math.floor((toMinutes(shift.end) - toMinutes(shift.start) - (day?.breakMinutes ?? shift.breakMinutes)) / 2)) : minutes;
-  // Leave hours come off whole: two hours off a seven and a half hour shift
-  // leaves five and a half, whatever the clock times say.
-  return Math.max(0, capped - (day?.leaveMinutes || 0));
+  return Math.max(0, toMinutes(shift.end) - toMinutes(shift.start) - shift.breakMinutes);
 };
-/** The break default shown for a window, so leaving early does not deduct lunch. */
-const breakMinutesFor = (worker, inTime, outTime) => {
-  const shift = shiftFor(worker);
-  return breakMinutesWithin(Math.max(toMinutes(inTime || shift.start), toMinutes(shift.start)), Math.min(toMinutes(outTime || shift.end), toMinutes(shift.end)));
-};
-const attendance = (worker, body) => {
-  const shift = shiftFor(worker);
-  const status = body.status ?? 'present';
-  if (!['present', 'half', 'leave'].includes(status)) fail('Choose present, half or leave.');
-  const inTime = body.inTime || shift.start, outTime = body.outTime || shift.end;
-  const start = toMinutes(inTime), end = toMinutes(outTime);
-  if (end <= start) fail('Departure must be after arrival.');
-  if (start < toMinutes(shift.start) || end > toMinutes(shift.end)) fail('Attendance must be within the worker shift.');
-  const breakMinutes = integer(body.breakMinutes ?? breakMinutesWithin(start, end), 'Break minutes', end - start);
-  const leaveMinutes = integer(body.leaveMinutes ?? 0, 'Leave minutes', Math.max(0, end - start - breakMinutes));
-  const result = { status, inTime, outTime, breakMinutes, leaveMinutes, note: String(body.note || '').slice(0, 200) };
-  result.availableMinutes = availableMinutesFor(worker, result);
-  return result;
-};
-/** Checks a shift/break configuration before it is stored or applied. */
 const readShiftSettings = body => {
   const source = body && typeof body === 'object' ? body : fail('Send shift settings.');
   const shifts = {};
@@ -207,6 +179,27 @@ const standingRecords = entries => {
   }
   return [...best.values()].sort((a, b) => b.rawRate - a.rawRate);
 };
+/** Highest daily quantity per toy/work step. Split saves count as one attempt.
+ * Equal quantities retain the first holder; training never competes. */
+const dailyPieceRecords = entries => {
+  const best = new Map(), competitors = new Map(), broken = [];
+  for (const row of dailyAttempts(entries)) {
+    if (row.minutes <= 0 || row.pieces <= 0) continue;
+    const key = `${row.toyId}|${row.processId}`, previous = best.get(key);
+    const jobWorkers = competitors.get(key) || new Map();
+    const competitor = [...jobWorkers.values()].filter(other => other.workerId !== row.workerId).sort((a, b) => b.pieces - a.pieces || a.date.localeCompare(b.date))[0];
+    const attempts = (previous?.attempts || 0) + 1;
+    if (!previous || row.pieces > previous.pieces) {
+      const next = { ...row, hours: row.minutes / 60, attempts };
+      best.set(key, next);
+      if (previous) broken.push({ ...next, previousPieces: previous.pieces, previousWorkerId: previous.workerId, previousDate: previous.date, competitorWorkerId: competitor?.workerId, competitorPieces: competitor?.pieces, competitorDate: competitor?.date, improvement: Math.round((row.pieces / previous.pieces - 1) * 100) });
+    } else best.set(key, { ...previous, attempts });
+    const personalBest = jobWorkers.get(row.workerId);
+    if (!personalBest || row.pieces > personalBest.pieces) jobWorkers.set(row.workerId, row);
+    competitors.set(key, jobWorkers);
+  }
+  return { board: [...best.values()].sort((a, b) => b.pieces - a.pieces || a.toyId.localeCompare(b.toyId) || a.processId.localeCompare(b.processId)), broken };
+};
 /**
  * A damage record stands on its own: a date, what toy, which part and how many.
  *
@@ -223,4 +216,4 @@ const readDamage = body => {
   if (!qty) fail('Damage qty must be greater than zero.');
   return { date: dayStart(body.date), toyName, partName, qty };
 };
-module.exports = { WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesFor, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, availableMinutesFor, attendance, readEntry, readDamage, rate, performanceFlags, recordBreaks, standingRecords, readTrainingDates, isTrainingOn };
+module.exports = { WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, shiftMinutesFor, readEntry, readDamage, rate, performanceFlags, recordBreaks, standingRecords, dailyPieceRecords, readTrainingDates, isTrainingOn };

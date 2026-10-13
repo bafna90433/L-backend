@@ -54,21 +54,47 @@ async function setup(t) {
   t.after(() => new Promise(resolve => server.close(resolve)));
   const request = async (role, method, path, body) => {
     const response = await fetch(`http://127.0.0.1:${server.address().port}/api/production${path}`, { method, headers: { ...(role ? { Authorization: `Bearer ${jwt.sign({ id: role }, SECRET)}` } : {}), 'Content-Type': 'application/json' }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
-    return { status: response.status, body: await response.json() };
+    return { status: response.status, body: await response.json().catch(() => null) };
   };
   const entry = (overrides = {}) => ({ date: '2026-10-05', labourId: 'w1', toyId: 'toy', processId: 'process', minutes: 60, pieces: 100, ...overrides });
   return { ...f, request, entry };
 }
 
-test('HTTP multi-work day keeps all three tasks and shares one cumulative time budget', async t => {
+test('HTTP manual recorder names persist without replacing authenticated audit identity', async t => {
+  const { request, entry, data } = await setup(t);
+  assert.equal((await request('supervisor', 'GET', '/masters')).body.features.manualEntryBy, true);
+  const created = await request('supervisor', 'POST', '/entries', entry({ enteredByName: '  Ramya  ', enteredBy: 'owner' }));
+  assert.equal(created.status, 200);
+  assert.equal(data.ProductionEntry[0].enteredByName, 'Ramya');
+  assert.equal(data.ProductionEntry[0].enteredBy, 'supervisor');
+  assert.equal(data.ProductionLog.at(-1).byName, 'Floor Supervisor');
+  assert.equal((await request('supervisor', 'GET', '/day?date=2026-10-05')).body.entries[0].enteredByName, 'Ramya');
+  assert.equal((await request('supervisor', 'PUT', `/entries/${created.body.id}`, { enteredByName: 'Sita' })).status, 200);
+  assert.equal(data.ProductionEntry[0].enteredByName, 'Sita');
+  await request('supervisor', 'PUT', `/entries/${created.body.id}`, { pieces: 120 });
+  assert.equal(data.ProductionEntry[0].enteredByName, 'Sita');
+  for (const name of ['', '  ', 123, 'x'.repeat(101)]) assert.equal((await request('supervisor', 'POST', '/entries', entry({ enteredByName: name }))).status, 400);
+  assert.equal((await request('supervisor', 'POST', '/entries', entry())).status, 200);
+  assert.equal(data.ProductionEntry.at(-1).enteredByName, 'Floor Supervisor');
+  const part = await request('admin', 'POST', '/damage-parts', { toyId: 'toy', name: 'Top' });
+  const damage = { date: '2026-10-05', toyId: 'toy', partId: part.body.id, qty: 5, enteredByName: 'Ravi' };
+  assert.equal((await request('supervisor', 'POST', '/damage', damage)).status, 200);
+  assert.equal((await request('supervisor', 'GET', '/damage?from=2026-10-05&to=2026-10-05')).body.entries[0].enteredByName, 'Ravi');
+  assert.equal(data.DamageEntry[0].enteredBy, 'supervisor');
+  assert.equal(data.ProductionLog.at(-1).byName, 'Floor Supervisor');
+  assert.equal((await request('supervisor', 'POST', '/damage', { ...damage, enteredByName: '' })).status, 400);
+  assert.equal(data.DamageEntry.length, 1);
+});
+
+test('HTTP multi-work day keeps all three tasks and uses entered task times without attendance limits', async t => {
   const {request,entry,data}=await setup(t);
   data.Toy.push({_id:'lizard',name:'Lizard',typeId:'type',isActive:true});
   data.ToyProcess.push({_id:'lizard-body',name:'Body assembly',toyId:'lizard',isActive:true},{_id:'bird-gear',name:'Gearbox joint',toyId:'toy',isActive:true});
   for(const work of [{toyId:'toy2',processId:'process2',minutes:240},{toyId:'lizard',processId:'lizard-body',minutes:120},{toyId:'toy',processId:'bird-gear',minutes:90}]) assert.equal((await request('supervisor','POST','/entries',entry({...work,labourId:'w2'}))).status,200);
   const day=(await request('supervisor','GET','/day?date=2026-10-05')).body;
-  assert.equal(day.entries.length,3);assert.equal(day.workers.find(row=>row.id==='w2').workedMinutes,450);
-  assert.equal((await request('supervisor','POST','/entries',entry({labourId:'w2',minutes:1}))).status,400);
-  assert.equal(data.ProductionLog.filter(row=>row.action==='entry-created').length,3);
+  assert.equal(day.entries.length,3);assert.equal(day.entries.reduce((sum,row)=>sum+row.minutes,0),450);assert.equal('availableMinutes' in day.workers[0],false);
+  assert.equal((await request('supervisor','POST','/entries',entry({labourId:'w2',minutes:1}))).status,200);
+  assert.equal(data.ProductionLog.filter(row=>row.action==='entry-created').length,4);
 });
 test('HTTP training dates are production-only, validated, preserved and audited atomically', async t => {
   const {request,data,setFailAudit}=await setup(t);
@@ -112,7 +138,6 @@ test('HTTP permission matrix makes owner/report-only read-only and admin masters
   for (const role of ['owner', 'reporter']) {
     assert.equal((await request(role, 'GET', '/masters')).status, 200);
     assert.equal((await request(role, 'POST', '/entries', entry())).status, 403);
-    assert.equal((await request(role, 'POST', '/day', { date: '2026-10-05', labourId: 'w1' })).status, 403);
     assert.equal((await request(role, 'POST', '/workers', { name: 'New' })).status, 403);
     assert.equal((await request(role, 'DELETE', '/toys/toy')).status, 403);
   }
@@ -122,47 +147,52 @@ test('HTTP permission matrix makes owner/report-only read-only and admin masters
   assert.equal((await request('admin', 'GET', '/report')).status, 200);
   assert.equal((await request('supervisor', 'POST', '/entries', entry())).status, 200);
 });
-test('HTTP validates selection, strict dates/integers and cumulative attendance budgets', async t => {
+test('HTTP validates selection, strict dates/integers without attendance budgets', async t => {
   const { request, entry, data } = await setup(t);
   for (const overrides of [{ pieces: -1 }, { pieces: 1.2 }, { pieces: '10' }, { minutes: 0 }, { minutes: 1.5 }, { date: '2026-02-30' }, { processId: 'process2' }, { labourId: 'old' }]) assert.equal((await request('supervisor', 'POST', '/entries', entry(overrides))).status, 400);
   data.ToyType[0].isActive = false;
   assert.equal((await request('supervisor', 'POST', '/entries', entry())).status, 400); data.ToyType[0].isActive = true;
-  assert.equal((await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w2', inTime: '10:30', outTime: '17:30', breakMinutes: 30 })).body.availableMinutes, 390);
-  assert.equal((await request('supervisor', 'POST', '/entries', entry({ labourId: 'w2', minutes: 390 }))).status, 200);
-  assert.equal((await request('supervisor', 'POST', '/entries', entry({ labourId: 'w2', minutes: 1 }))).status, 400);
-  assert.equal((await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w2', status: 'leave' })).status, 400);
-  assert.equal((await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w2', inTime: '10:30', outTime: '17:30', breakMinutes: 60 })).status, 400);
+  data.ProductionDay.push({ _id: 'legacy-day', labourId: 'w2', date: dayStart('2026-10-05'), status: 'leave', availableMinutes: 0 });
+  assert.equal((await request('supervisor', 'POST', '/entries', entry({ labourId: 'w2', minutes: 600 }))).status, 200);
+  assert.equal((await request('supervisor', 'POST', '/entries', entry({ labourId: 'w2', minutes: 600 }))).status, 200);
   const day = await request('supervisor', 'GET', '/day?date=2026-10-05');
-  assert.equal(day.body.date, '2026-10-05'); assert.equal(day.body.workers.find(row => row.id === 'w2').breakMinutes, 30);
+  assert.equal(day.body.date, '2026-10-05');
+  assert.equal('availableMinutes' in day.body.workers[0], false);
+  const report = await request('owner', 'GET', '/report?days=1&to=2026-10-05');
+  assert.equal('loggedPercent' in report.body.workers[0], false);
   const concurrent = await Promise.all([request('supervisor', 'POST', '/entries', entry({ minutes: 500 })), request('supervisor', 'POST', '/entries', entry({ minutes: 500 }))]);
-  assert.deepEqual(concurrent.map(row => row.status).sort(), [200, 400]);
+  assert.deepEqual(concurrent.map(row => row.status).sort(), [200, 200]);
+  assert.equal((await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w2' })).status, 404);
 });
-test('HTTP entry edits preserve attribution, move dates, exclude self from budget and audit full before/after', async t => {
+test('HTTP entry edits allow recorder labels while preserving account attribution and full audit', async t => {
   const { request, entry, data } = await setup(t);
   const created = await request('supervisor', 'POST', '/entries', entry({ minutes: 660 }));
-  assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { pieces: 90, enteredByName: 'Spoofed', enteredBy: 'spoofed', createdAt: '2000-01-01' })).status, 200);
-  assert.equal(data.ProductionEntry[0].enteredByName, 'Floor Supervisor'); assert.equal(data.ProductionEntry[0].enteredBy, 'supervisor');
+  assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { pieces: 90, enteredByName: 'Ravi', enteredBy: 'spoofed', createdAt: '2000-01-01' })).status, 200);
+  assert.equal(data.ProductionEntry[0].enteredByName, 'Ravi'); assert.equal(data.ProductionEntry[0].enteredBy, 'supervisor');
+  assert.notEqual(new Date(data.ProductionEntry[0].createdAt).getFullYear(), 2000);
   const log = data.ProductionLog.at(-1); assert.equal(log.byName, 'Production Admin'); assert.equal(log.before.pieces, 100); assert.equal(log.after.pieces, 90); assert.equal(log.before.toyId, 'toy');
-  assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { date: '2026-10-06', labourId: 'w2', minutes: 451 })).status, 400);
+  assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { date: '2026-10-06', labourId: 'w2', minutes: 451 })).status, 200);
   assert.equal((await request('admin', 'PUT', `/entries/${created.body.id}`, { date: '2026-10-06', labourId: 'w2', minutes: 450 })).status, 200);
   assert.equal(data.ProductionEntry[0].date.toISOString(), '2026-10-06T00:00:00.000Z');
 });
-test('HTTP audit failure rolls back entries, attendance, deletes and masters', async t => {
+test('HTTP audit failure rolls back entries, deletes and masters', async t => {
   const { request, entry, data, setFailAudit } = await setup(t);
   const created = await request('supervisor', 'POST', '/entries', entry());
   const baseline = clone(data); setFailAudit(true);
   assert.equal((await request('supervisor', 'POST', '/entries', entry())).status, 500);
   assert.equal((await request('supervisor', 'PUT', `/entries/${created.body.id}`, { pieces: 7 })).status, 500);
   assert.equal((await request('supervisor', 'DELETE', `/entries/${created.body.id}`)).status, 500);
-  assert.equal((await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w1', inTime: '09:30' })).status, 500);
   assert.equal((await request('admin', 'POST', '/workers', { name: 'Rollback' })).status, 500);
   assert.deepEqual(data, baseline);
 });
 test('HTTP worker management preserves payroll and history when archived', async t => {
   const { request, entry, data } = await setup(t);
   await request('supervisor', 'POST', '/entries', entry());
-  const worker = await request('admin', 'POST', '/workers', { name: 'New Woman', gender: 'Female', empCode: 'N1', department: 'Toys', monthlySalary: 999999 });
+  const worker = await request('admin', 'POST', '/workers', { name: 'New Woman', gender: 'Female', empCode: 'N1', department: 'Toys', monthlySalary: 999999, createdBy: 'Another person' });
   assert.equal(worker.status, 200); assert.equal(worker.body.shiftMinutes, 450); assert.equal(data.Labour.at(-1).monthlySalary, 0);
+  const created = data.ProductionLog.find(row => row.action === 'worker-created' && row.after.id === worker.body.id);
+  assert.equal(created.byName, 'Production Admin');
+  assert.equal(created.after.gender, 'Female');
   assert.equal((await request('admin', 'PUT', '/workers/w1', { name: 'Renamed Worker', monthlySalary: 0, whatsapp: 'overwrite', shiftStart: '08:30' })).status, 200);
   assert.equal(data.Labour[0].monthlySalary, 25000); assert.equal(data.Labour[0].whatsapp, 'existing-phone'); assert.equal(data.Labour[0].shiftStart, '07:00');
   assert.equal((await request('admin', 'DELETE', '/workers/w1')).status, 200);
@@ -218,7 +248,7 @@ test('HTTP shift settings are stored, applied to available hours and refused whe
 
   // The stored times drive what the day view offers the supervisor.
   const day = await request('owner', 'GET', '/day?date=2026-10-05');
-  assert.equal(day.body.workers.find(row => row.id === 'w2').availableMinutes, 360);
+  assert.equal(day.body.workers.find(row => row.id === 'w2').shiftMinutes, 360);
 
   assert.equal((await request('admin', 'PUT', '/shifts', { shifts: { Male: { start: '09:00', end: '19:00' }, Female: { start: '10:00', end: '17:00' } }, breaks: [{ label: 'All day', from: '10:00', to: '17:00' }] })).status, 400);
   assert.equal((await request('admin', 'GET', '/shifts')).body.hours.Female, 6);
@@ -244,6 +274,11 @@ test('HTTP report names who broke a record, and refuses one set in a short burst
   ]);
   assert.equal(records[0].improvement, 11);
   assert.equal(records[0].processName, 'Body assembly');
+  assert.equal(report.body.dailyRecordBoard[0].pieces, 1000);
+  assert.equal(report.body.dailyRecordBoard[0].workerName, 'Male Worker');
+  assert.equal(report.body.dailyRecordBoard[0].categoryName, 'Friction');
+  assert.equal(report.body.dailyRecordBoard[0].toyName, 'Bird');
+  assert.equal(report.body.dailyRecordsBroken[0].previousPieces, 900);
 });
 
 test('HTTP entries carry a work type, and one marked training stays out of the ranking while still counting as output', async t => {
@@ -386,29 +421,6 @@ test('HTTP the same part name cannot be added to a toy twice', async t => {
   assert.equal((await request('admin', 'PUT', `/damage-parts/${second.body.id}`, { name: 'Bottom part' })).status, 200);
 });
 
-test('HTTP leave hours come straight off the shift and cap what can be recorded', async t => {
-  const { request, data } = await setup(t);
-
-  // Two hours off a seven and a half hour shift leaves five and a half.
-  const saved = await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w2', leaveMinutes: 120 });
-  assert.equal(saved.status, 200);
-  assert.equal(saved.body.availableMinutes, 330);
-  assert.equal(data.ProductionDay[0].leaveMinutes, 120);
-
-  const day = await request('owner', 'GET', '/day?date=2026-10-05');
-  const worker = day.body.workers.find(row => row.id === 'w2');
-  assert.equal(worker.leaveMinutes, 120);
-  assert.equal(worker.availableMinutes, 330);
-
-  // Work beyond what is left after the leave is refused.
-  const entry = minutes => request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w2', toyId: 'toy', processId: 'process', minutes, pieces: 10 });
-  assert.equal((await entry(331)).status, 400);
-  assert.equal((await entry(330)).status, 200);
-
-  // And leave cannot be longer than the shift itself.
-  assert.equal((await request('supervisor', 'POST', '/day', { date: '2026-10-06', labourId: 'w2', leaveMinutes: 600 })).status, 400);
-});
-
 test('HTTP one entry’s own history can be asked for, with what changed', async t => {
   const { request } = await setup(t);
   const made = await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w1', toyId: 'toy', processId: 'process', minutes: 240, pieces: 900 });
@@ -430,7 +442,6 @@ test('HTTP one entry’s own history can be asked for, with what changed', async
 test('HTTP renaming an account carries the name onto everything it recorded', async t => {
   const { request, data } = await setup(t);
   await request('supervisor', 'POST', '/entries', { date: '2026-10-05', labourId: 'w1', toyId: 'toy', processId: 'process', minutes: 60, pieces: 50 });
-  await request('supervisor', 'POST', '/day', { date: '2026-10-05', labourId: 'w2', leaveMinutes: 60 });
   await request('supervisor', 'POST', '/damage', { date: '2026-10-05', toyId: 'toy', partName: 'Top part', qty: 2 });
   assert.equal(data.ProductionEntry[0].enteredByName, 'Floor Supervisor');
 
@@ -443,7 +454,6 @@ test('HTTP renaming an account carries the name onto everything it recorded', as
   assert.equal(done.body.from, 'Floor Supervisor');
   assert.equal(data.User.find(row => row._id === 'supervisor').name, 'Sunil');
   assert.equal(data.ProductionEntry[0].enteredByName, 'Sunil');
-  assert.equal(data.ProductionDay.find(row => row.labourId === 'w2').enteredByName, 'Sunil');
   assert.equal(data.DamageEntry[0].enteredByName, 'Sunil');
   assert.ok(data.ProductionLog.some(row => row.byName === 'Sunil'));
 
