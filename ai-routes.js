@@ -199,10 +199,17 @@ async function askGemini({ question, lang, history, systemOverride, noSearch, im
     throw error;
   }
 
+  // Gemini rejects parts whose text is empty or blank — filter those out
+  // before building contents, otherwise it throws "required oneof field data".
+  const safeHistory = history.filter(
+    m => (m.role === 'user' || m.role === 'assistant') &&
+         typeof m.content === 'string' && m.content.trim()
+  );
+
   const contents = [
-    ...history.map(m => ({
+    ...safeHistory.map(m => ({
       role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }]
+      parts: [{ text: m.content.trim() }]
     })),
     {
       role: 'user',

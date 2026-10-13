@@ -472,20 +472,51 @@ function createProductionRouter(options = {}) {
 
     const instructions = [
       'You are the production analyst for Bafna Toys, a toy factory in India.',
-      'Answer ONLY from the DATA below. If something is not in it, say so plainly and say what you would need.',
-      'Quantities are process pieces: a toy passes several work steps, so these are not finished toys. Say that when it matters.',
-      "A worker is judged against the target of the work steps they actually did, never against another worker's raw output.",
-      'Shift lengths are already net of breaks.',
-      'Give the numbers, name the people and the toys, and keep it short enough to read on a phone.',
-      req.body?.lang === 'hinglish' ? 'Reply in Hinglish: Hindi written in English letters, mixed with English words the way the office speaks.' : 'Reply in English.',
+      'Answer ONLY from the DATA provided below. If something is not in the data, say so clearly and explain what data would be needed.',
+      'Quantities are process pieces: a single toy passes several work steps, so process pieces ≠ finished toys — mention this when it matters.',
+      "Judge a worker only against the target rate for the work steps THEY actually did, never against another worker's raw output.",
+      'Shift lengths in the data are already net of breaks.',
+      '',
+      'HOW TO ANSWER:',
+      '- Give FULL details: exact numbers, worker names, toy names, ranked lists, comparisons.',
+      '- Use Markdown tables, bullet points, or numbered lists wherever they make the data clearer.',
+      '- If the question asks "kitna" or "how much", give the exact figure AND put it in context (e.g. compared to target or previous period if available).',
+      '- If the question asks "kaun" or "who", name every relevant person and include their numbers.',
+      '- Never truncate a list unless it would exceed 20 items; in that case show the top 10 and bottom 5.',
+      '- At the end of a detailed answer, add a one-sentence plain-language summary starting with the word "Summary:".',
+      req.body?.lang === 'hinglish'
+        ? 'Language: Reply in Hinglish — Hindi written in English letters, mixed with English business/technical words the way the factory office actually speaks. Do NOT use Devanagari script.'
+        : 'Language: Reply in clear English.',
       '',
       `DATA (${pack.period.from} to ${pack.period.to}):`,
       JSON.stringify(pack)
     ].join('\n');
 
     const lang = req.body?.lang === 'hinglish' ? 'hinglish' : 'en';
-    const history = Array.isArray(req.body?.history) ? req.body.history.slice(-8).filter(turn => turn && typeof turn.question === 'string' && typeof turn.answer === 'string').map(turn => ({ question: String(turn.question).slice(0, 1000), answer: String(turn.answer).slice(0, 4000) })) : [];
-    const answer = await askRoutes.PROVIDERS[model]({ question, lang, history, systemOverride: instructions, noSearch: true });
+
+    // Embed prior turns as plain text in the question rather than using each
+    // provider's multi-turn "history" array.  Newer Gemini models with thinking
+    // enabled require thinking-blocks in model turns, which we don't store.
+    // Text injection is provider-agnostic and never triggers that validation.
+    const rawHistory = Array.isArray(req.body?.history)
+      ? req.body.history.slice(-4).filter(turn =>
+          turn &&
+          typeof turn.question === 'string' && turn.question.trim() &&
+          typeof turn.answer === 'string' && turn.answer.trim()
+        )
+      : [];
+
+    const contextBlock = rawHistory.length > 0
+      ? rawHistory.map((turn, i) =>
+          `[Turn ${i + 1}]\nUser: ${String(turn.question).trim().slice(0, 500)}\nAssistant: ${String(turn.answer).trim().slice(0, 1000)}`
+        ).join('\n\n') + '\n\n---\n\n'
+      : '';
+
+    const fullQuestion = contextBlock
+      ? `${contextBlock}Current question: ${question}`
+      : question;
+
+    const answer = await askRoutes.PROVIDERS[model]({ question: fullQuestion, lang, history: [], systemOverride: instructions, noSearch: true });
     void askRoutes.recordAiUsage(model, answer.usage);
     await audit(req, 'assistant-asked', `Asked the production assistant: ${question.slice(0, 120)}`, null, null);
     return { answer: answer.text, model, period: pack.period, data: pack };
