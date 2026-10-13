@@ -466,9 +466,9 @@ function createProductionRouter(options = {}) {
 
     const enabled = await askRoutes.readEnabledProviders();
     const wanted = String(req.body?.model || '');
-    const order = [wanted, 'claude', 'gemini', 'gpt'].filter((name, index, all) => name && all.indexOf(name) === index);
-    const model = order.find(name => askRoutes.PROVIDERS[name] && enabled[name] !== false);
-    if (!model) fail('No AI provider is switched on. Turn one on in Settings → AI Council APIs.', 503);
+    const order = [wanted, 'gemini', 'claude', 'gpt'].filter((name, index, all) => name && all.indexOf(name) === index);
+    const available = order.filter(name => askRoutes.PROVIDERS[name] && enabled[name] !== false);
+    if (!available.length) fail('No AI provider is switched on. Turn one on in Settings → AI Council APIs.', 503);
 
     const instructions = [
       'You are the production analyst for Bafna Toys, a toy factory in India.',
@@ -516,11 +516,35 @@ function createProductionRouter(options = {}) {
       ? `${contextBlock}Current question: ${question}`
       : question;
 
-    const answer = await askRoutes.PROVIDERS[model]({ question: fullQuestion, lang, history: [], systemOverride: instructions, noSearch: true });
-    void askRoutes.recordAiUsage(model, answer.usage);
+    let answer = null;
+    let chosenModel = null;
+    let lastError = null;
+
+    for (const candidate of available) {
+      try {
+        answer = await askRoutes.PROVIDERS[candidate]({
+          question: fullQuestion,
+          lang,
+          history: [],
+          systemOverride: instructions,
+          noSearch: true
+        });
+        chosenModel = candidate;
+        void askRoutes.recordAiUsage(candidate, answer.usage);
+        break;
+      } catch (err) {
+        lastError = err;
+        console.warn(`AI provider ${candidate} failed:`, err.message);
+      }
+    }
+
+    if (!answer) {
+      throw lastError || new Error('All AI providers failed to answer.');
+    }
+
     await audit(req, 'assistant-asked', `Asked the production assistant: ${question.slice(0, 120)}`, null, null);
-    return { answer: answer.text, model, period: pack.period, data: pack };
-  }, true));
+    return { answer: answer.text, model: chosenModel, period: pack.period, data: pack };
+  }));
   router.get('/history', auth, read, handle(async req => {
     const limit = req.query.limit === undefined ? 60 : Number(req.query.limit);
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) fail('History limit must be between 1 and 200.');
