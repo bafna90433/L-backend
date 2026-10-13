@@ -429,10 +429,12 @@ function createProductionRouter(options = {}) {
     const data = await buildReport({ days: String(days), to });
     const from = data.from;
 
-    const [damageRows, damageParts, catalogue] = await Promise.all([
+    const [damageRows, damageParts, allProcesses, allToys, allTypes] = await Promise.all([
       DamageEntry.find({ date: { $gte: dayStart(from), $lte: dayEnd(to) } }),
       DamagePart.find({}),
-      ToyProcess.find({})
+      ToyProcess.find({}),
+      Toy.find({}),
+      ToyType.find({})
     ]);
     const partName = row => damageParts.find(part => id(part) === id(row.partId))?.name || row.partName || 'Not recorded';
     const damageByToy = new Map(), damageByPart = new Map();
@@ -441,12 +443,32 @@ function createProductionRouter(options = {}) {
       const key = `${row.toyName} — ${partName(row)}`;
       damageByPart.set(key, (damageByPart.get(key) || 0) + row.qty);
     }
-    const targetOf = new Map(catalogue.map(step => [id(step), step.targetPerHour || 0]));
+
+    const toyMap = new Map(allToys.map(t => [id(t), t.name]));
+    const typeMap = new Map(allTypes.map(t => [id(t), t.name]));
+    const targetOf = new Map(allProcesses.map(step => [id(step), step.targetPerHour || 0]));
+
+    // Full master catalogue of all toys and work steps with their official target rates
+    const masterCatalogue = allProcesses.filter(p => p.isActive !== false).map(step => {
+      const toy = allToys.find(t => id(t) === id(step.toyId));
+      const toyName = toy?.name || toyMap.get(id(step.toyId)) || 'General';
+      const typeName = typeMap.get(id(toy?.typeId)) || '';
+      const targetPerHour = step.targetPerHour || 0;
+      return {
+        toyName,
+        category: typeName,
+        workStepName: step.name,
+        targetPerHour,
+        targetFemaleShift_7_5h: Math.round(targetPerHour * 7.5),
+        targetMaleShift_11h: Math.round(targetPerHour * 11)
+      };
+    });
 
     const pack = {
       factory: 'Bafna Toys',
       period: { from, to: data.to, days: data.days },
       shiftHours: shiftLengths(),
+      masterCatalogue,
       totals: data.totals,
       dailyTotals: data.trend.filter(row => row.pieces > 0),
       workers: data.workers,
@@ -472,17 +494,30 @@ function createProductionRouter(options = {}) {
 
     const instructions = [
       'You are the production analyst for Bafna Toys, a toy factory in India.',
-      'Answer ONLY from the DATA provided below. If something is not in the data, say so clearly and explain what data would be needed.',
+      'Answer ONLY from the DATA provided below. If something is not in the data, explain clearly what was found and what is missing.',
       'Quantities are process pieces: a single toy passes several work steps, so process pieces ≠ finished toys — mention this when it matters.',
       "Judge a worker only against the target rate for the work steps THEY actually did, never against another worker's raw output.",
-      'Shift lengths in the data are already net of breaks.',
+      'Shift lengths in the data are already net of breaks (Male = 11 hours, Female = 7.5 hours).',
       '',
-      'HOW TO ANSWER:',
+      'CRITICAL: HOW TO ANSWER PRODUCTION TIME ESTIMATE QUESTIONS ("kitna din lagega" / "kitna time lagega"):',
+      '- The user often asks how many days are needed to make X pieces of a toy or work step (e.g., "10000 pcs GOOSE head joint me kitna din lagega", "10 worker lagaye to kitna din lagega").',
+      '- STEP 1: Search `masterCatalogue` for the toy and work step name (case-insensitive match, e.g. "GOOSE", "Head joint", "Body assembly", "Leg gumming").',
+      '- STEP 2: Check if past production entries exist in `dailyTotals` / `workSteps`. If past floor records do not exist for that specific step, state directly: "Pichle 90 din me is step ka actual floor production entry record nahi mila, lekin factory ke Master Target Catalogue me iska target rate set hai."',
+      '- STEP 3: PERFORM THE EXACT CALCULATION USING THE TARGET RATE FROM `masterCatalogue`:',
+      '    * Target rate: [targetPerHour] pcs/hour per worker',
+      '    * 1 Male worker (11-hr shift): [targetMaleShift_11h] pcs/day',
+      '    * 1 Female worker (7.5-hr shift): [targetFemaleShift_7_5h] pcs/day',
+      '    * If the user specifies the number of workers (e.g. 10 workers):',
+      '        - Male shift (10 workers): 10 × [targetMaleShift_11h] = Total daily pcs -> Days = X / Total daily pcs',
+      '        - Female shift (10 workers): 10 × [targetFemaleShift_7_5h] = Total daily pcs -> Days = X / Total daily pcs',
+      '    * If the user did NOT specify worker count, provide a clear table showing: 1 worker, 5 workers, 10 workers for both Male and Female shifts.',
+      '- STEP 4: NEVER SAY "calculation is not possible" or "data missing" if the work step exists in `masterCatalogue`! ALWAYS provide the exact math, formula and number of days.',
+      '',
+      'GENERAL ANSWERING RULES:',
       '- Give FULL details: exact numbers, worker names, toy names, ranked lists, comparisons.',
       '- Use Markdown tables, bullet points, or numbered lists wherever they make the data clearer.',
-      '- If the question asks "kitna" or "how much", give the exact figure AND put it in context (e.g. compared to target or previous period if available).',
+      '- If the question asks "kitna" or "how much", give the exact figure AND put it in context.',
       '- If the question asks "kaun" or "who", name every relevant person and include their numbers.',
-      '- Never truncate a list unless it would exceed 20 items; in that case show the top 10 and bottom 5.',
       '- At the end of a detailed answer, add a one-sentence plain-language summary starting with the word "Summary:".',
       req.body?.lang === 'hinglish'
         ? 'Language: Reply in Hinglish — Hindi written in English letters, mixed with English business/technical words the way the factory office actually speaks. Do NOT use Devanagari script.'
