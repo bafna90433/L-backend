@@ -230,7 +230,7 @@ async function askGemini({ question, lang, history, systemOverride, noSearch, im
         contents,
         ...(noSearch ? {} : { tools: [{ google_search: {} }] }),
         systemInstruction: { parts: [{ text: systemOverride || systemFor(lang) }] },
-        generationConfig: { maxOutputTokens: 4096 }
+        generationConfig: { maxOutputTokens: 8192 }
       })
     }
   );

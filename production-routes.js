@@ -429,12 +429,13 @@ function createProductionRouter(options = {}) {
     const data = await buildReport({ days: String(days), to });
     const from = data.from;
 
-    const [damageRows, damageParts, allProcesses, allToys, allTypes] = await Promise.all([
+    const [damageRows, damageParts, allProcesses, allToys, allTypes, allLabours] = await Promise.all([
       DamageEntry.find({ date: { $gte: dayStart(from), $lte: dayEnd(to) } }),
       DamagePart.find({}),
       ToyProcess.find({}),
       Toy.find({}),
-      ToyType.find({})
+      ToyType.find({}),
+      Labour.find({})
     ]);
     const partName = row => damageParts.find(part => id(part) === id(row.partId))?.name || row.partName || 'Not recorded';
     const damageByToy = new Map(), damageByPart = new Map();
@@ -447,6 +448,29 @@ function createProductionRouter(options = {}) {
     const toyMap = new Map(allToys.map(t => [id(t), t.name]));
     const typeMap = new Map(allTypes.map(t => [id(t), t.name]));
     const targetOf = new Map(allProcesses.map(step => [id(step), step.targetPerHour || 0]));
+
+    // Every active worker on the books, whether or not they logged work.
+    const activeLabours = allLabours.filter(row => row.status === 'active' && row.empCode !== 'COMPANY' && !row.name.toLowerCase().includes('company'));
+    const maleLabours = activeLabours.filter(w => w.gender === 'Male');
+    const femaleLabours = activeLabours.filter(w => w.gender === 'Female');
+    const prodWorkerMap = new Map((data.workers || []).map(w => [w.id, w]));
+
+    const workforceDirectory = activeLabours.map(w => {
+      const prod = prodWorkerMap.get(id(w));
+      return {
+        id: id(w),
+        name: w.name,
+        gender: w.gender || 'Male',
+        empCode: w.empCode || '',
+        department: w.department || 'Production',
+        shiftHours: w.gender === 'Female' ? '7.5 hrs' : '11 hrs',
+        hasLoggedProduction: !!prod,
+        totalPieces: prod ? prod.pieces : 0,
+        totalHoursWorked: prod ? prod.hours : 0,
+        daysWorked: prod ? prod.daysWorked : 0,
+        averageRatePerHour: prod ? prod.perHour : 0
+      };
+    }).sort((a, b) => (b.totalPieces - a.totalPieces) || a.name.localeCompare(b.name));
 
     // Full master catalogue of all toys and work steps with their official target rates
     const masterCatalogue = allProcesses.filter(p => p.isActive !== false).map(step => {
@@ -468,9 +492,22 @@ function createProductionRouter(options = {}) {
       factory: 'Bafna Toys',
       period: { from, to: data.to, days: data.days },
       shiftHours: shiftLengths(),
+      workforce: {
+        totalActiveWorkers: activeLabours.length,
+        maleWorkersCount: maleLabours.length,
+        femaleWorkersCount: femaleLabours.length,
+        workersLoggedProductionCount: data.workers.length,
+        workersWithoutProductionCount: activeLabours.length - data.workers.length,
+        directory: workforceDirectory
+      },
       masterCatalogue,
-      totals: data.totals,
+      totals: {
+        ...data.totals,
+        totalFactoryActiveWorkers: activeLabours.length,
+        workersWithLoggedProduction: data.workers.length
+      },
       dailyTotals: data.trend.filter(row => row.pieces > 0),
+      workersWithProduction: data.workers,
       workers: data.workers,
       toys: data.toys,
       workSteps: (data.processes || []).map(step => ({ ...step, targetPerHour: targetOf.get(step.id) || 0 })),
@@ -492,44 +529,31 @@ function createProductionRouter(options = {}) {
     const available = order.filter(name => askRoutes.PROVIDERS[name] && enabled[name] !== false);
     if (!available.length) fail('No AI provider is switched on. Turn one on in Settings → AI Council APIs.', 503);
 
+    const lang = req.body?.lang === 'hinglish' ? 'hinglish' : 'en';
+    // What the model needs is what the figures mean, not a script of answers.
+    // Counts and totals belong in the data, where they stay true: a prompt that
+    // said "83 workers" was still saying it after the 84th was hired.
     const instructions = [
       'You are the production analyst for Bafna Toys, a toy factory in India.',
-      'Answer ONLY from the DATA provided below. If something is not in the data, explain clearly what was found and what is missing.',
-      'Quantities are process pieces: a single toy passes several work steps, so process pieces ≠ finished toys — mention this when it matters.',
-      "Judge a worker only against the target rate for the work steps THEY actually did, never against another worker's raw output.",
-      'Shift lengths in the data are already net of breaks (Male = 11 hours, Female = 7.5 hours).',
+      'Answer the question that was asked, fully, using the DATA below. Read every count and total from the data itself.',
+      'If the data cannot answer something, say what it does show and what is missing. Never invent a figure.',
       '',
-      'CRITICAL: HOW TO ANSWER PRODUCTION TIME ESTIMATE QUESTIONS ("kitna din lagega" / "kitna time lagega"):',
-      '- The user often asks how many days are needed to make X pieces of a toy or work step (e.g., "10000 pcs GOOSE head joint me kitna din lagega", "10 worker lagaye to kitna din lagega").',
-      '- STEP 1: Search `masterCatalogue` for the toy and work step name (case-insensitive match, e.g. "GOOSE", "Head joint", "Body assembly", "Leg gumming").',
-      '- STEP 2: Check if past production entries exist in `dailyTotals` / `workSteps`. If past floor records do not exist for that specific step, state directly: "Pichle 90 din me is step ka actual floor production entry record nahi mila, lekin factory ke Master Target Catalogue me iska target rate set hai."',
-      '- STEP 3: PERFORM THE EXACT CALCULATION USING THE TARGET RATE FROM `masterCatalogue`:',
-      '    * Target rate: [targetPerHour] pcs/hour per worker',
-      '    * 1 Male worker (11-hr shift): [targetMaleShift_11h] pcs/day',
-      '    * 1 Female worker (7.5-hr shift): [targetFemaleShift_7_5h] pcs/day',
-      '    * If the user specifies the number of workers (e.g. 10 workers):',
-      '        - Total pieces / (Workers × Rate per hour) = Total Hours needed',
-      '    * If the user did NOT specify worker count, provide a clear table showing: 1 worker, 2 workers, 5 workers, 10 workers.',
-      '- STEP 4: TIME FORMATTING RULES (CRITICAL - NO CONFUSING FRACTIONS):',
-      '    * If the duration is LESS THAN 1 FULL SHIFT: Show ONLY HOURS (e.g., "4 Ghante (Same day me complete)"), NEVER display confusing decimal days like "0.36 Din" or "0.53 Din"!',
-      '    * If the duration is 1 day or more: Display in simple practical days (e.g., "1 Din 2 Ghante", "~2 Din", "~3.5 Din").',
-      '- STEP 5: NEVER SAY "calculation is not possible" or "data missing" if the work step exists in `masterCatalogue`! ALWAYS provide the exact math, formula and time.',
+      'What the figures mean:',
+      '- Quantities are process pieces. One toy passes several work steps, so these are not finished toys.',
+      "- A worker is judged against the target rate of the work steps they actually did, never against another worker's raw output.",
+      '- Shift lengths are already net of breaks.',
+      '- workforce.directory is every active worker on the books; workers[] is only those with production in this period. The two are different numbers and both matter.',
+      '- Training work counts in output but is excluded from rankings, flags and records.',
+      '- damage is counted separately from production: it is broken pieces, not output.',
       '',
-      'GENERAL ANSWERING RULES:',
-      '- Give FULL details: exact numbers, worker names, toy names, ranked lists, comparisons.',
-      '- Use Markdown tables, bullet points, or numbered lists wherever they make the data clearer.',
-      '- If the question asks "kitna" or "how much", give the exact figure AND put it in context.',
-      '- If the question asks "kaun" or "who", name every relevant person and include their numbers.',
-      '- At the end of a detailed answer, add a one-sentence plain-language summary starting with the word "Summary:".',
-      req.body?.lang === 'hinglish'
-        ? 'Language: Reply in Hinglish — Hindi written in English letters, mixed with English business/technical words the way the factory office actually speaks. Do NOT use Devanagari script.'
-        : 'Language: Reply in clear English.',
+      'How to answer:',
+      'Give the whole picture, not a headline. Name the people, the toys and the work steps, give the numbers behind each claim, and use a table when there is more than a handful of rows. Say what the numbers suggest doing. Keep it readable on a phone.',
+      'The page already puts an Excel download under every answer, covering the same data, so point to that rather than refusing a file.',
+      lang === 'hinglish' ? 'Reply in Hinglish: Hindi written in English letters, mixed with the English words the office uses.' : 'Reply in English.',
       '',
-      `DATA (${pack.period.from} to ${pack.period.to}):`,
+      'DATA (' + pack.period.from + ' to ' + pack.period.to + '):',
       JSON.stringify(pack)
     ].join('\n');
-
-    const lang = req.body?.lang === 'hinglish' ? 'hinglish' : 'en';
 
     // Embed prior turns as plain text in the question rather than using each
     // provider's multi-turn "history" array.  Newer Gemini models with thinking
