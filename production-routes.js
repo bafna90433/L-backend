@@ -244,9 +244,31 @@ function createProductionRouter(options = {}) {
     if (!['Male', 'Female', 'Other'].includes(gender)) fail('Choose a valid gender.');
     return { name: name.slice(0, 100), gender, empCode: String(body.empCode ?? previous?.empCode ?? '').trim().slice(0, 50), department: String(body.department ?? previous?.department ?? '').trim().slice(0, 100) };
   };
+  /**
+   * The next free employee code, as 001, 002, and so on.
+   *
+   * Codes the office did not number this way — the biometric machine's own
+   * numbers, the B-prefixed staff ones, COMPANY — are left out of the count
+   * rather than renumbered, so adding a worker never disturbs them.
+   */
+  const nextEmpCode = async () => {
+    const taken = new Set((await Labour.find({})).map(row => String(row.empCode || '').trim()));
+    const used = [...taken].filter(code => /^\d+$/.test(code)).map(Number);
+    let next = Math.max(0, ...used) + 1;
+    while (taken.has(String(next).padStart(3, '0'))) next++;
+    return String(next).padStart(3, '0');
+  };
+  /** Two people must never share a code, or attendance lands on the wrong one. */
+  const refuseDuplicateCode = async (code, excludeId = '') => {
+    if (!code) return;
+    const clash = (await Labour.find({})).find(row => String(row.empCode || '').trim().toLowerCase() === code.toLowerCase() && id(row) !== excludeId);
+    if (clash) fail(`Employee code ${code} already belongs to ${clash.name}.`);
+  };
   router.post('/workers', auth, admin, handle(async req => {
     rules.readTrainingDates(req.body || {});
     const data = workerData(req.body || {}), shift = shiftFor(data);
+    if (!data.empCode) data.empCode = await nextEmpCode();
+    await refuseDuplicateCode(data.empCode);
     const worker = await Labour.create({ ...data, status: 'active', employeeType: 'labourer', whatsapp: '', monthlySalary: 0, shiftStart: shift.start, shiftEnd: shift.end, workingHours: shiftMinutesFor(data) / 60 });
     const schedule = await saveTraining(worker, req.body || {});
     const result = { ...workerView(worker), ...schedule };
@@ -258,7 +280,10 @@ function createProductionRouter(options = {}) {
     const previous = (await trainingSchedules()).get(id(before));
     rules.readTrainingDates(req.body || {}, previous);
     // Payroll/contact and attendance fields on existing Labour rows are preserved.
-    const worker = await Labour.findByIdAndUpdate(req.params.id, workerData(req.body || {}, before), { new: true });
+    const changes = workerData(req.body || {}, before);
+    if (!changes.empCode) changes.empCode = await nextEmpCode();
+    await refuseDuplicateCode(changes.empCode, id(before));
+    const worker = await Labour.findByIdAndUpdate(req.params.id, changes, { new: true });
     const schedule = await saveTraining(worker, req.body || {}, previous);
     const result = { ...workerView(worker), ...schedule };
     await audit(req, 'worker-updated', `Edited worker "${worker.name}"`, { ...workerView(before), ...previous }, result);

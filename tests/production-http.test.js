@@ -462,3 +462,24 @@ test('HTTP renaming an account carries the name onto everything it recorded', as
   assert.equal((await request('admin', 'POST', '/account-active', { username: 'reporter', isActive: false })).status, 200);
   assert.equal(data.User.find(row => row._id === 'reporter').isActive, false);
 });
+
+test('HTTP employee codes are generated when blank and never shared by two workers', async t => {
+  const { request, data } = await setup(t);
+
+  // Blank code: the next free 001-style number is given.
+  const first = await request('admin', 'POST', '/workers', { name: 'No Code One', gender: 'Female' });
+  assert.equal(first.status, 200);
+  assert.match(first.body.empCode, /^\d{3}$/);
+  const second = await request('admin', 'POST', '/workers', { name: 'No Code Two', gender: 'Male' });
+  assert.notEqual(second.body.empCode, first.body.empCode);
+
+  // A code somebody already holds is refused, on create and on edit.
+  const clash = await request('admin', 'POST', '/workers', { name: 'Copycat', gender: 'Male', empCode: first.body.empCode });
+  assert.equal(clash.status, 400);
+  assert.match(clash.body.message, /already belongs to No Code One/);
+  assert.equal((await request('admin', 'PUT', `/workers/${second.body.id}`, { empCode: first.body.empCode })).status, 400);
+
+  // Its own code is not a clash with itself.
+  assert.equal((await request('admin', 'PUT', `/workers/${second.body.id}`, { empCode: second.body.empCode })).status, 200);
+  assert.equal(data.Labour.filter(row => row.empCode === first.body.empCode).length, 1);
+});
