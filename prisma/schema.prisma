@@ -420,6 +420,12 @@ model ProductionEntry {
    * regular, training or cover — how this piece of work should be read.
    */
   workType      String   @default("regular")
+  /**
+   * Group work: every member's entry carries the same groupId and the name the
+   * floor calls the group by. Empty on an ordinary single-worker entry.
+   */
+  groupId       String   @default("")
+  groupName     String   @default("")
   enteredBy     String   @default("")
   enteredByName String   @default("")
   createdAt     DateTime @default(now())
@@ -432,6 +438,7 @@ model ProductionEntry {
   @@index([labourId])
   @@index([toyId])
   @@index([processId])
+  @@index([groupId])
 }
 
 /**

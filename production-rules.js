@@ -95,7 +95,7 @@ const readEntry = body => {
   if (!minutes) fail('Minutes must be greater than zero.');
   const workType = body.workType === undefined || body.workType === null || body.workType === '' ? 'regular' : String(body.workType);
   if (!WORK_TYPES.includes(workType)) fail('Work type must be regular, training or cover.');
-  return { date: dayStart(body.date), labourId: id(body.labourId), toyId: id(body.toyId), processId: id(body.processId), minutes, pieces: integer(body.pieces, 'Pieces'), note: String(body.note || '').slice(0, 200), workType };
+  return { date: dayStart(body.date), labourId: id(body.labourId), toyId: id(body.toyId), processId: id(body.processId), minutes, pieces: integer(body.pieces, 'Pieces'), note: String(body.note || '').slice(0, 200), workType, groupId: String(body.groupId || '').trim().slice(0, 40), groupName: String(body.groupName || '').trim().slice(0, 60) };
 };
 const rate = (pieces, minutes) => minutes ? Math.round(pieces * 600 / minutes) / 10 : 0;
 const readTrainingDates = (body, previous = {}) => {
@@ -201,6 +201,19 @@ const dailyPieceRecords = entries => {
   return { board: [...best.values()].sort((a, b) => b.pieces - a.pieces || a.toyId.localeCompare(b.toyId) || a.processId.localeCompare(b.processId)), broken };
 };
 /**
+ * A group's pieces, split between the people who made them.
+ *
+ * Some toys are only made as a group, and nobody can say who made which piece,
+ * so the members share equally. The remainder goes to the first members rather
+ * than being rounded away, so the shares always add back up to the total the
+ * floor reported.
+ */
+const sharePieces = (pieces, members) => {
+  if (!Number.isSafeInteger(members) || members < 1) fail('A group needs at least one worker.');
+  const base = Math.floor(pieces / members), extra = pieces % members;
+  return Array.from({ length: members }, (_, index) => base + (index < extra ? 1 : 0));
+};
+/**
  * Overtime is read from the hours already entered, never typed in again.
  *
  * Each worker's own shift is the line: whatever a day runs past it is overtime,
@@ -244,4 +257,4 @@ const readDamage = body => {
   if (!qty) fail('Damage qty must be greater than zero.');
   return { date: dayStart(body.date), toyName, partName, qty };
 };
-module.exports = { WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, shiftMinutesFor, readEntry, readDamage, rate, OVERTIME_GRACE_MINUTES, overtimeMinutes, overtimeDays, performanceFlags, recordBreaks, standingRecords, dailyPieceRecords, readTrainingDates, isTrainingOn };
+module.exports = { WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, shiftMinutesFor, readEntry, readDamage, rate, sharePieces, OVERTIME_GRACE_MINUTES, overtimeMinutes, overtimeDays, performanceFlags, recordBreaks, standingRecords, dailyPieceRecords, readTrainingDates, isTrainingOn };

@@ -244,6 +244,10 @@ const ProductionEntrySchema = new mongoose.Schema({
   pieces: { type: Number, default: 0 },
   note: { type: String, default: '' },
   workType: { type: String, default: 'regular' },
+  // Group work: one entry per member, all sharing an id and the name the floor
+  // calls the group by. Empty on ordinary single-worker entries.
+  groupId: { type: String, default: '' },
+  groupName: { type: String, default: '' },
   enteredBy: { type: String, default: '' },
   enteredByName: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now },

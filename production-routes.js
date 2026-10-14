@@ -1,4 +1,5 @@
 const express = require('express');
+const { randomUUID } = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const rules = require('./production-rules');
 const { id, plain, fail, shiftFor, dayKey, dayStart, dayEnd, integer, shiftMinutesFor, readEntry, readDamage, rate, performanceFlags, recordBreaks, standingRecords } = rules;
@@ -354,7 +355,7 @@ function createProductionRouter(options = {}) {
   }, true));
   const viewEntries = (entries, workers, toys, processes, types = [], schedules = new Map()) => {
     const wm = new Map(workers.map(row => [id(row), row])), tm = new Map(toys.map(row => [id(row), row])), pm = new Map(processes.map(row => [id(row), row])), cm = new Map(types.map(row => [id(row), row]));
-    return entries.map(row => ({ id: id(row), date: dayKey(row.date), labourId: id(row.labourId), workerName: wm.get(id(row.labourId))?.name || 'Archived worker', toyId: id(row.toyId), toyName: tm.get(id(row.toyId))?.name || 'Archived toy', typeId: id(tm.get(id(row.toyId))?.typeId), typeName: cm.get(id(tm.get(id(row.toyId))?.typeId))?.name || '', processId: id(row.processId), processName: pm.get(id(row.processId))?.name || 'Archived process', gender: wm.get(id(row.labourId))?.gender || 'Male', shiftMinutes: shiftMinutesFor(wm.get(id(row.labourId))), minutes: row.minutes, pieces: row.pieces, workType: row.workType || 'regular', note: row.note || '', enteredByName: row.enteredByName || '', enteredBy: id(row.enteredBy), createdAt: row.createdAt, updatedAt: row.updatedAt, isTraining: row.workType === 'training' || rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) }));
+    return entries.map(row => ({ id: id(row), date: dayKey(row.date), labourId: id(row.labourId), workerName: wm.get(id(row.labourId))?.name || 'Archived worker', toyId: id(row.toyId), toyName: tm.get(id(row.toyId))?.name || 'Archived toy', typeId: id(tm.get(id(row.toyId))?.typeId), typeName: cm.get(id(tm.get(id(row.toyId))?.typeId))?.name || '', processId: id(row.processId), processName: pm.get(id(row.processId))?.name || 'Archived process', gender: wm.get(id(row.labourId))?.gender || 'Male', shiftMinutes: shiftMinutesFor(wm.get(id(row.labourId))), minutes: row.minutes, pieces: row.pieces, workType: row.workType || 'regular', groupId: row.groupId || '', groupName: row.groupName || '', note: row.note || '', enteredByName: row.enteredByName || '', enteredBy: id(row.enteredBy), createdAt: row.createdAt, updatedAt: row.updatedAt, isTraining: row.workType === 'training' || rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) }));
   };
   router.get('/day', auth, read, handle(async req => {
     const date = dayStart(req.query.date), filter = { date: { $gte: date, $lte: dayEnd(date) } };
@@ -369,6 +370,38 @@ function createProductionRouter(options = {}) {
     const created = await ProductionEntry.create({ ...data, enteredBy: id(req.user), enteredByName: recorderName(req.body || {}, req.user.name), createdAt: new Date(), updatedAt: new Date() });
     await audit(req, 'entry-created', `${worker.name} — ${toy.name} / ${process.name} — ${data.pieces} pcs in ${data.minutes} min`, null, created, id(created));
     return { id: id(created) };
+  }, true));
+  /**
+   * One job done by several people together.
+   *
+   * It is saved as an ordinary entry per member, all carrying the same group id
+   * and name, because every report in this system reads one worker per row. The
+   * pieces are shared out and the hours are the hours each of them stood there,
+   * so the factory total and each person's rate both stay true. All or none:
+   * half a group saved would read as a group that was short of people.
+   */
+  router.post('/entries/group', auth, write, handle(async req => {
+    const body = req.body || {};
+    const labourIds = [...new Set((Array.isArray(body.labourIds) ? body.labourIds : []).map(row => id(row)).filter(Boolean))];
+    if (labourIds.length < 2) fail('A group needs at least two different workers.');
+    if (labourIds.length > 25) fail('A group can hold up to twenty-five workers.');
+    const groupName = String(body.groupName || '').trim().slice(0, 60);
+    if (!groupName) fail('Give the group a name.');
+    const pieces = integer(body.pieces, 'Pieces');
+    if (pieces < labourIds.length) fail(`${labourIds.length} workers need at least ${labourIds.length} pieces to share.`);
+    const groupId = randomUUID();
+    const shares = rules.sharePieces(pieces, labourIds.length);
+    const created = [];
+    let job = null;
+    for (const [index, labourId] of labourIds.entries()) {
+      const data = readEntry({ ...body, labourId, pieces: shares[index], groupId, groupName });
+      const { worker, toy, process } = await validateSelection(data);
+      job = { toy, process };
+      created.push({ worker, row: await ProductionEntry.create({ ...data, enteredBy: id(req.user), enteredByName: recorderName(body, req.user.name), createdAt: new Date(), updatedAt: new Date() }) });
+    }
+    const { toy, process } = job;
+    await audit(req, 'entry-group-created', `Group "${groupName}" (${created.map(row => row.worker.name).join(', ')}) — ${toy.name} / ${process.name} — ${pieces} pcs in ${created[0].row.minutes} min each`, null, { groupId, groupName, pieces, labourIds }, groupId);
+    return { groupId, groupName, shares, entries: created.map(row => id(row.row)) };
   }, true));
   router.put('/entries/:id', auth, write, handle(async req => {
     const before = await get(ProductionEntry, req.params.id, 'Entry'), data = readEntry({ ...plain(before), ...req.body });

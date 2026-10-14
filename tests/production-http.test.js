@@ -483,3 +483,32 @@ test('HTTP employee codes are generated when blank and never shared by two worke
   assert.equal((await request('admin', 'PUT', `/workers/${second.body.id}`, { empCode: second.body.empCode })).status, 200);
   assert.equal(data.Labour.filter(row => row.empCode === first.body.empCode).length, 1);
 });
+
+test('HTTP group work saves one entry per member, shares the pieces and refuses half a group', async t => {
+  const { request, entry, data } = await setup(t);
+  const group = overrides => entry({ labourId: undefined, labourIds: ['w1', 'w2'], groupName: '  Packing line  ', pieces: 101, minutes: 540, enteredByName: 'Ramya', ...overrides });
+
+  const saved = await request('supervisor', 'POST', '/entries/group', group());
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body.shares, [51, 50]);
+  const rows = data.ProductionEntry;
+  assert.equal(rows.length, 2);
+  // The pieces add back up, the hours are each person's own, and both members
+  // carry the same group.
+  assert.equal(rows.reduce((sum, row) => sum + row.pieces, 0), 101);
+  assert.deepEqual(rows.map(row => row.minutes), [540, 540]);
+  assert.equal(rows[0].groupName, 'Packing line');
+  assert.equal(rows[0].groupId, rows[1].groupId);
+  assert.ok(rows[0].groupId);
+  assert.equal((await request('supervisor', 'GET', '/day?date=2026-10-05')).body.entries[0].groupName, 'Packing line');
+
+  // A group is all or nothing: an archived member leaves nothing behind.
+  const before = data.ProductionEntry.length;
+  assert.equal((await request('supervisor', 'POST', '/entries/group', group({ labourIds: ['w1', 'old'] }))).status, 400);
+  assert.equal(data.ProductionEntry.length, before);
+
+  for (const bad of [{ labourIds: ['w1'] }, { labourIds: ['w1', 'w1'] }, { labourIds: [] }, { groupName: '' }, { pieces: 1 }]) {
+    assert.equal((await request('supervisor', 'POST', '/entries/group', group(bad))).status, 400, JSON.stringify(bad));
+  }
+  assert.equal(data.ProductionEntry.length, before);
+});
