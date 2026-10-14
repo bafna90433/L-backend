@@ -67,6 +67,11 @@ model Labour {
   status        String   @default("active")
   employeeType  String   @default("labourer")
   department    String   @default("")
+  /**
+   * Which unit of the factory this person works in, e.g. "Unit 1". Blank on
+   * anyone taken on before the units were recorded.
+   */
+  unit          String   @default("")
   phonePeNumber String   @default("")
   upiId         String   @default("")
   phonePeQrUrl  String   @default("")

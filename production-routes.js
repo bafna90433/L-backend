@@ -93,7 +93,7 @@ function createProductionRouter(options = {}) {
     return { worker, toy, process };
   };
   const sort = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name);
-  const workerView = worker => ({ id: id(worker), name: worker.name, gender: worker.gender || 'Male', department: worker.department || '', empCode: worker.empCode || '', status: worker.status, shift: shiftFor(worker).label, shiftStart: shiftFor(worker).start, shiftEnd: shiftFor(worker).end, shiftMinutes: shiftMinutesFor(worker) });
+  const workerView = worker => ({ id: id(worker), name: worker.name, gender: worker.gender || 'Male', department: worker.department || '', unit: worker.unit || '', empCode: worker.empCode || '', status: worker.status, shift: shiftFor(worker).label, shiftStart: shiftFor(worker).start, shiftEnd: shiftFor(worker).end, shiftMinutes: shiftMinutesFor(worker) });
   const shiftHours = () => ({ Male: shiftMinutesFor({ gender: 'Male' }) / 60, Female: shiftMinutesFor({ gender: 'Female' }) / 60 });
   const shiftLengths = () => Object.fromEntries(['Male', 'Female'].map(gender => {
     const minutes = shiftMinutesFor({ gender });
@@ -243,7 +243,7 @@ function createProductionRouter(options = {}) {
     const name = String(body.name ?? previous?.name ?? '').trim(), gender = body.gender ?? previous?.gender ?? 'Male';
     if (!name) fail('Worker name is required.');
     if (!['Male', 'Female', 'Other'].includes(gender)) fail('Choose a valid gender.');
-    return { name: name.slice(0, 100), gender, empCode: String(body.empCode ?? previous?.empCode ?? '').trim().slice(0, 50), department: String(body.department ?? previous?.department ?? '').trim().slice(0, 100) };
+    return { name: name.slice(0, 100), gender, empCode: String(body.empCode ?? previous?.empCode ?? '').trim().slice(0, 50), department: String(body.department ?? previous?.department ?? '').trim().slice(0, 100), unit: String(body.unit ?? previous?.unit ?? '').trim().slice(0, 40) };
   };
   /**
    * The next free employee code, as 001, 002, and so on.

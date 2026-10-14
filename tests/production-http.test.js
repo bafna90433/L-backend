@@ -188,8 +188,14 @@ test('HTTP audit failure rolls back entries, deletes and masters', async t => {
 test('HTTP worker management preserves payroll and history when archived', async t => {
   const { request, entry, data } = await setup(t);
   await request('supervisor', 'POST', '/entries', entry());
-  const worker = await request('admin', 'POST', '/workers', { name: 'New Woman', gender: 'Female', empCode: 'N1', department: 'Toys', monthlySalary: 999999, createdBy: 'Another person' });
+  const worker = await request('admin', 'POST', '/workers', { name: 'New Woman', gender: 'Female', empCode: 'N1', department: 'Toys', unit: '  Unit 2  ', monthlySalary: 999999, createdBy: 'Another person' });
   assert.equal(worker.status, 200); assert.equal(worker.body.shiftMinutes, 450); assert.equal(data.Labour.at(-1).monthlySalary, 0);
+  // The unit is kept, trimmed, and comes back with the worker; an edit that
+  // does not mention it leaves it alone.
+  assert.equal(worker.body.unit, 'Unit 2');
+  assert.equal((await request('admin', 'PUT', `/workers/${worker.body.id}`, { department: 'Packing' })).body.unit, 'Unit 2');
+  assert.equal((await request('admin', 'PUT', `/workers/${worker.body.id}`, { unit: 'Unit 1' })).body.unit, 'Unit 1');
+  assert.equal((await request('owner', 'GET', '/masters')).body.workers.find(row => row.id === worker.body.id).unit, 'Unit 1');
   const created = data.ProductionLog.find(row => row.action === 'worker-created' && row.after.id === worker.body.id);
   assert.equal(created.byName, 'Production Admin');
   assert.equal(created.after.gender, 'Female');

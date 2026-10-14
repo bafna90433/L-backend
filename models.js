@@ -24,6 +24,9 @@ const LabourSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'inactive'], default: 'active' },
   employeeType: { type: String, enum: ['labourer', 'staff'], default: 'labourer' },
   department: { type: String, default: '' },
+  // Which of the factory's units this person works in. Blank on anyone taken on
+  // before the units were recorded.
+  unit: { type: String, default: '' },
   phonePeNumber: { type: String, default: '' },
   upiId: { type: String, default: '' },
   phonePeQrUrl: { type: String, default: '' },
