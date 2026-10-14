@@ -201,6 +201,34 @@ const dailyPieceRecords = entries => {
   return { board: [...best.values()].sort((a, b) => b.pieces - a.pieces || a.toyId.localeCompare(b.toyId) || a.processId.localeCompare(b.processId)), broken };
 };
 /**
+ * Overtime is read from the hours already entered, never typed in again.
+ *
+ * Each worker's own shift is the line: whatever a day runs past it is overtime,
+ * whether that day was one job or four. A second field for it would be a second
+ * figure that could disagree with the first. A few minutes over is rounding on
+ * the floor, not overtime, so a short grace is left before it counts.
+ */
+const OVERTIME_GRACE_MINUTES = 15;
+const overtimeMinutes = (worker, minutes) => {
+  const extra = minutes - shiftMinutesFor(worker);
+  return extra >= OVERTIME_GRACE_MINUTES ? extra : 0;
+};
+/** One row per worker per day, carrying that day's shift length and overtime. */
+const overtimeDays = (entries, workerOf = () => undefined) => {
+  const days = new Map();
+  for (const row of entries) {
+    const key = `${id(row.labourId)}|${dayKey(row.date)}`;
+    const day = days.get(key) || { date: dayKey(row.date), workerId: id(row.labourId), minutes: 0, pieces: 0, entries: 0 };
+    day.minutes += row.minutes; day.pieces += row.pieces; day.entries++;
+    days.set(key, day);
+  }
+  return [...days.values()].map(day => {
+    const worker = workerOf(day.workerId);
+    const otMinutes = overtimeMinutes(worker, day.minutes);
+    return { ...day, gender: worker?.gender === 'Female' ? 'Female' : 'Male', shiftMinutes: shiftMinutesFor(worker), minutesHours: Math.round(day.minutes / 6) / 10, otMinutes, otHours: Math.round(otMinutes / 6) / 10 };
+  }).sort((a, b) => b.date.localeCompare(a.date) || b.otMinutes - a.otMinutes);
+};
+/**
  * A damage record stands on its own: a date, what toy, which part and how many.
  *
  * The two names are typed by hand because a broken part is often not a step in
@@ -216,4 +244,4 @@ const readDamage = body => {
   if (!qty) fail('Damage qty must be greater than zero.');
   return { date: dayStart(body.date), toyName, partName, qty };
 };
-module.exports = { WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, shiftMinutesFor, readEntry, readDamage, rate, performanceFlags, recordBreaks, standingRecords, dailyPieceRecords, readTrainingDates, isTrainingOn };
+module.exports = { WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, shiftMinutesFor, readEntry, readDamage, rate, OVERTIME_GRACE_MINUTES, overtimeMinutes, overtimeDays, performanceFlags, recordBreaks, standingRecords, dailyPieceRecords, readTrainingDates, isTrainingOn };

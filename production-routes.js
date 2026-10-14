@@ -354,7 +354,7 @@ function createProductionRouter(options = {}) {
   }, true));
   const viewEntries = (entries, workers, toys, processes, types = [], schedules = new Map()) => {
     const wm = new Map(workers.map(row => [id(row), row])), tm = new Map(toys.map(row => [id(row), row])), pm = new Map(processes.map(row => [id(row), row])), cm = new Map(types.map(row => [id(row), row]));
-    return entries.map(row => ({ id: id(row), date: dayKey(row.date), labourId: id(row.labourId), workerName: wm.get(id(row.labourId))?.name || 'Archived worker', toyId: id(row.toyId), toyName: tm.get(id(row.toyId))?.name || 'Archived toy', typeId: id(tm.get(id(row.toyId))?.typeId), typeName: cm.get(id(tm.get(id(row.toyId))?.typeId))?.name || '', processId: id(row.processId), processName: pm.get(id(row.processId))?.name || 'Archived process', minutes: row.minutes, pieces: row.pieces, workType: row.workType || 'regular', note: row.note || '', enteredByName: row.enteredByName || '', enteredBy: id(row.enteredBy), createdAt: row.createdAt, updatedAt: row.updatedAt, isTraining: rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) }));
+    return entries.map(row => ({ id: id(row), date: dayKey(row.date), labourId: id(row.labourId), workerName: wm.get(id(row.labourId))?.name || 'Archived worker', toyId: id(row.toyId), toyName: tm.get(id(row.toyId))?.name || 'Archived toy', typeId: id(tm.get(id(row.toyId))?.typeId), typeName: cm.get(id(tm.get(id(row.toyId))?.typeId))?.name || '', processId: id(row.processId), processName: pm.get(id(row.processId))?.name || 'Archived process', gender: wm.get(id(row.labourId))?.gender || 'Male', shiftMinutes: shiftMinutesFor(wm.get(id(row.labourId))), minutes: row.minutes, pieces: row.pieces, workType: row.workType || 'regular', note: row.note || '', enteredByName: row.enteredByName || '', enteredBy: id(row.enteredBy), createdAt: row.createdAt, updatedAt: row.updatedAt, isTraining: row.workType === 'training' || rules.isTrainingOn(schedules.get(id(row.labourId)), row.date) }));
   };
   router.get('/day', auth, read, handle(async req => {
     const date = dayStart(req.query.date), filter = { date: { $gte: date, $lte: dayEnd(date) } };
@@ -419,14 +419,24 @@ function createProductionRouter(options = {}) {
     const total = entries.reduce((sum, row) => ({ pieces: sum.pieces + row.pieces, minutes: sum.minutes + row.minutes }), { pieces: 0, minutes: 0 });
     const subtotal = rows => ({ ...measure(rows.reduce((sum, row) => ({ pieces: sum.pieces + row.pieces, minutes: sum.minutes + row.minutes }), { pieces: 0, minutes: 0 })), entries: rows.length, workers: new Set(rows.map(row => id(row.labourId))).size });
     const training = entries.filter(row => classify(row).isTraining), regular = entries.filter(row => !classify(row).isTraining);
+    // Overtime belongs to a day, not to an entry: four jobs inside one long
+    // day are one day of overtime, not four.
+    const otDays = rules.overtimeDays(entries, key => wm.get(key));
+    const overtime = otDays.filter(row => row.otMinutes > 0).map(row => ({ ...row, workerName: wm.get(row.workerId)?.name || 'Archived worker' }));
+    const otMinutesTotal = overtime.reduce((sum, row) => sum + row.otMinutes, 0);
+    const otOf = key => {
+      const mine = overtime.filter(row => row.workerId === key);
+      return { otHours: Math.round(mine.reduce((sum, row) => sum + row.otMinutes, 0) / 6) / 10, otDays: mine.length };
+    };
     return {
-      from: dayKey(from), to: dayKey(to), days, quantityKind: 'process-pieces', totals: { ...measure(total), entries: entries.length, workers: byWorker.size },
+      from: dayKey(from), to: dayKey(to), days, quantityKind: 'process-pieces', totals: { ...measure(total), entries: entries.length, workers: byWorker.size, otHours: Math.round(otMinutesTotal / 6) / 10, otDays: overtime.length, otWorkers: new Set(overtime.map(row => row.workerId)).size },
+      overtime, overtimeGraceMinutes: rules.OVERTIME_GRACE_MINUTES,
       trainingTotals: subtotal(training), regularTotals: subtotal(regular),
       trainingWorkers: [...byWorker.keys()].filter(key => training.some(row => id(row.labourId) === key)).map(key => ({ id: key, name: wm.get(key)?.name || 'Archived worker', ...subtotal(training.filter(row => id(row.labourId) === key)), ...schedules.get(key) })),
       entries: viewEntries(entries, workers, toys, processes, types, schedules).sort((a, b) => b.date.localeCompare(a.date) || new Date(b.createdAt) - new Date(a.createdAt)),
       trend: [...trend.values()].map(row => ({ date: row.date, ...measure(row), workers: row.workers.size })),
       workers: [...byWorker].map(([key, total]) => {
-        return { id: key, name: wm.get(key)?.name || 'Archived worker', gender: wm.get(key)?.gender || 'Male', ...measure(total), regular: subtotal(regular.filter(row => id(row.labourId) === key)), training: subtotal(training.filter(row => id(row.labourId) === key)), daysWorked: total.dates.size };
+        return { id: key, name: wm.get(key)?.name || 'Archived worker', gender: wm.get(key)?.gender || 'Male', ...measure(total), regular: subtotal(regular.filter(row => id(row.labourId) === key)), training: subtotal(training.filter(row => id(row.labourId) === key)), ...otOf(key), daysWorked: total.dates.size };
       }).sort((a, b) => b.pieces - a.pieces),
       toys: [...byToy].map(([key, total]) => ({ id: key, name: tm.get(key)?.name || 'Archived toy', ...measure(total) })).sort((a, b) => b.pieces - a.pieces),
       processes: [...byProcess].map(([key, total]) => ({ id: key, name: pm.get(key)?.name || 'Archived process', toyId: id(pm.get(key)?.toyId), toyName: tm.get(id(pm.get(key)?.toyId))?.name || 'Archived toy', ...measure(total) })).sort((a, b) => b.pieces - a.pieces),
@@ -488,7 +498,7 @@ function createProductionRouter(options = {}) {
         gender: w.gender || 'Male',
         empCode: w.empCode || '',
         department: w.department || 'Production',
-        shiftHours: w.gender === 'Female' ? '7.5 hrs' : '11 hrs',
+        shiftHours: shiftMinutesFor(w) / 60,
         hasLoggedProduction: !!prod,
         totalPieces: prod ? prod.pieces : 0,
         totalHoursWorked: prod ? prod.hours : 0,
@@ -508,8 +518,8 @@ function createProductionRouter(options = {}) {
         category: typeName,
         workStepName: step.name,
         targetPerHour,
-        targetFemaleShift_7_5h: Math.round(targetPerHour * 7.5),
-        targetMaleShift_11h: Math.round(targetPerHour * 11)
+        targetPerFemaleShift: Math.round(targetPerHour * shiftMinutesFor({ gender: 'Female' }) / 60),
+        targetPerMaleShift: Math.round(targetPerHour * shiftMinutesFor({ gender: 'Male' }) / 60)
       };
     });
 
@@ -540,6 +550,13 @@ function createProductionRouter(options = {}) {
       recordsBroken: data.records,
       standingRecords: data.recordBoard,
       training: { totals: data.trainingTotals, workers: data.trainingWorkers },
+      overtime: {
+        graceMinutes: data.overtimeGraceMinutes,
+        totalHours: data.totals.otHours,
+        days: data.totals.otDays,
+        workers: data.totals.otWorkers,
+        byDay: data.overtime
+      },
       damage: {
         totalPieces: damageRows.reduce((sum, row) => sum + row.qty, 0),
         entries: damageRows.length,
@@ -568,6 +585,7 @@ function createProductionRouter(options = {}) {
       '- Quantities are process pieces. One toy passes several work steps, so these are not finished toys.',
       "- A worker is judged against the target rate of the work steps they actually did, never against another worker's raw output.",
       '- Shift lengths are already net of breaks.',
+      "- overtime is worked out from the hours entered, not typed in: a day's minutes above that worker's own shift length. It is per worker per day, so a long day split across four jobs is one overtime day.",
       '- workforce.directory is every active worker on the books; workers[] is only those with production in this period. The two are different numbers and both matter.',
       '- Training work counts in output but is excluded from rankings, flags and records.',
       '- damage is counted separately from production: it is broken pieces, not output.',

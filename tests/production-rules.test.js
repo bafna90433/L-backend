@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
-const { shiftMinutesFor, readEntry, dayStart, dayKey, toMinutes, performanceFlags, configureShifts, shiftSettings, readShiftSettings } = require('../production-rules');
+const { overtimeDays, overtimeMinutes, shiftMinutesFor, readEntry, dayStart, dayKey, toMinutes, performanceFlags, configureShifts, shiftSettings, readShiftSettings } = require('../production-rules');
 
 test('configured shift duration supplies catalogue target labels', () => {
   // The floor's own figures: 12 hours less an hour of breaks is 11, and
@@ -55,4 +55,27 @@ test('shift and break times come from settings, and a break only counts if it fa
   assert.throws(() => readShiftSettings({ shifts, breaks: [{ label: 'Dawn', from: '08:00', to: '08:15' }] }), /outside the male shift/);
   assert.throws(() => readShiftSettings({ shifts: { Male: { start: '09:00', end: '08:00' }, Female: shifts.Female }, breaks: [] }), /must end after it starts/);
   assert.throws(() => readShiftSettings({ shifts: { Male: shifts.Male, Female: { start: '10:00', end: '11:00' } }, breaks: [{ label: 'Long', from: '10:00', to: '11:00' }] }), /no working time/);
+});
+
+test('overtime is a day above the worker own shift, counted once per day', () => {
+  const workers = { f: { gender: 'Female' }, m: { gender: 'Male' } };
+  const days = overtimeDays([
+    // One eleven-hour day split across two jobs is one overtime day, not two.
+    { labourId: 'f', date: '2026-10-13', minutes: 390, pieces: 90 },
+    { labourId: 'f', date: '2026-10-13', minutes: 270, pieces: 60 },
+    // A full shift, and five minutes over, are not overtime.
+    { labourId: 'f', date: '2026-10-12', minutes: 450, pieces: 100 },
+    { labourId: 'm', date: '2026-10-12', minutes: 665, pieces: 400 },
+    { labourId: 'm', date: '2026-10-13', minutes: 900, pieces: 500 }
+  ], key => workers[key]);
+  const of = (worker, date) => days.find(row => row.workerId === worker && row.date === date);
+  assert.equal(of('f', '2026-10-13').entries, 2);
+  assert.equal(of('f', '2026-10-13').otMinutes, 210);
+  assert.equal(of('m', '2026-10-13').otMinutes, 240);
+  assert.equal(of('f', '2026-10-12').otMinutes, 0);
+  assert.equal(of('m', '2026-10-12').otMinutes, 0);
+  // The grace is the line, and an unknown worker falls back to the male shift.
+  assert.equal(overtimeMinutes({ gender: 'Female' }, 450 + 14), 0);
+  assert.equal(overtimeMinutes({ gender: 'Female' }, 450 + 15), 15);
+  assert.equal(overtimeMinutes(undefined, 660), 0);
 });
