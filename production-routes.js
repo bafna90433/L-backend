@@ -559,18 +559,36 @@ function createProductionRouter(options = {}) {
     // provider's multi-turn "history" array.  Newer Gemini models with thinking
     // enabled require thinking-blocks in model turns, which we don't store.
     // Text injection is provider-agnostic and never triggers that validation.
+    // The whole thread is carried, not the last few turns: a follow-up like
+    // "aur uska damage?" only makes sense if what came before is still there.
+    // Older turns drop out only when the budget runs out, and the model is told
+    // that happened rather than quietly losing them.
+    const HISTORY_BUDGET = 24000;
     const rawHistory = Array.isArray(req.body?.history)
-      ? req.body.history.slice(-4).filter(turn =>
+      ? req.body.history.filter(turn =>
           turn &&
           typeof turn.question === 'string' && turn.question.trim() &&
           typeof turn.answer === 'string' && turn.answer.trim()
         )
       : [];
 
-    const contextBlock = rawHistory.length > 0
-      ? rawHistory.map((turn, i) =>
-          `[Turn ${i + 1}]\nUser: ${String(turn.question).trim().slice(0, 500)}\nAssistant: ${String(turn.answer).trim().slice(0, 1000)}`
-        ).join('\n\n') + '\n\n---\n\n'
+    const kept = [];
+    let spent = 0;
+    for (let index = rawHistory.length - 1; index >= 0; index--) {
+      const turn = rawHistory[index];
+      const text = `User: ${String(turn.question).trim().slice(0, 1000)}\nAssistant: ${String(turn.answer).trim().slice(0, 3000)}`;
+      if (spent + text.length > HISTORY_BUDGET) break;
+      spent += text.length;
+      kept.unshift(text);
+    }
+    const dropped = rawHistory.length - kept.length;
+
+    const contextBlock = kept.length > 0
+      ? 'EARLIER IN THIS CONVERSATION'
+        + (dropped > 0 ? ` (${dropped} older ${dropped === 1 ? 'turn' : 'turns'} left out for length)` : '')
+        + ':\n\n'
+        + kept.map((text, i) => `[Turn ${i + 1 + dropped}]\n${text}`).join('\n\n')
+        + '\n\n---\n\n'
       : '';
 
     const fullQuestion = contextBlock
