@@ -106,37 +106,57 @@ test('the MD hands work out and the first hand-out starts the trail', async t =>
   }
 });
 
-test('whoever holds the work can hand it on, with a reason, and the trail grows', async t => {
+test('only the MD moves work between people, and every hop keeps its reason', async t => {
   const { request } = await setup(t);
   const made = await request('owner', 'POST', '/', { title: 'Scrap follow-up', assignedTo: 'ramya' });
   const path = `/${made.body._id}/reassign`;
 
-  // Somebody who is not holding it cannot move it.
+  // The floor updates and talks; it does not move work, not even its own.
+  assert.equal((await request('ramya', 'POST', path, { to: 'preeti', reason: 'too loaded' })).status, 403);
   assert.equal((await request('preeti', 'POST', path, { to: 'deepa', reason: 'not mine' })).status, 403);
   // A reason is not optional, and it has to go to somebody else.
-  assert.equal((await request('ramya', 'POST', path, { to: 'preeti' })).status, 400);
-  assert.equal((await request('ramya', 'POST', path, { to: 'ramya', reason: 'myself' })).status, 400);
+  assert.equal((await request('owner', 'POST', path, { to: 'preeti' })).status, 400);
+  assert.equal((await request('owner', 'POST', path, { to: 'ramya', reason: 'already there' })).status, 400);
 
-  const moved = await request('ramya', 'POST', path, { to: 'preeti', reason: 'Four days of load already' });
+  const moved = await request('owner', 'POST', path, { to: 'preeti', reason: 'Ramya has four days of load' });
   assert.equal(moved.status, 200);
   assert.equal(moved.body.assignedToName, 'Preeti');
   assert.equal(moved.body.assignments.length, 2);
+  // The hop reads as the work moving off Ramya's desk, with the MD named as
+  // the one who moved it — both facts, not one standing in for the other.
   assert.equal(moved.body.assignments[1].fromName, 'Ramya');
-  assert.equal(moved.body.assignments[1].reason, 'Four days of load already');
+  assert.equal(moved.body.assignments[1].byName, 'MD');
+  assert.equal(moved.body.assignments[1].byRole, 'owner');
+  assert.equal(moved.body.assignments[1].reason, 'Ramya has four days of load');
   // Each hop starts where the one before it ended.
   assert.equal(moved.body.assignments[0].to, moved.body.assignments[1].from);
+});
 
-  // The MD can move it too, even though it is not with them.
-  const again = await request('owner', 'POST', path, { to: 'deepa', reason: 'Preeti is on leave' });
-  assert.equal(again.body.assignments.length, 3);
-  assert.equal(again.body.assignedToName, 'Deepa');
+test('the people on a piece of work talk on it, and the MD reads the same thread', async t => {
+  const { request } = await setup(t);
+  const made = await request('owner', 'POST', '/', { title: 'Scrap follow-up', assignedTo: 'ramya' });
+  const path = `/${made.body._id}/message`;
+  await request('owner', 'POST', `/${made.body._id}/reassign`, { to: 'preeti', reason: 'load' });
+
+  assert.equal((await request('preeti', 'POST', path, { text: '  Called them, no answer  ' })).status, 200);
+  // Ramya handed it on but still knows the history, so she may still write.
+  assert.equal((await request('ramya', 'POST', path, { text: 'Try the Chennai number' })).status, 200);
+  const said = await request('owner', 'POST', path, { text: 'Close it by Friday' });
+  assert.deepEqual(said.body.messages.map(line => line.text), ['Called them, no answer', 'Try the Chennai number', 'Close it by Friday']);
+  assert.deepEqual(said.body.messages.map(line => line.byName), ['Preeti', 'Ramya', 'MD']);
+  assert.equal(said.body.messages[2].byRole, 'owner');
+
+  // Somebody with nothing to do with this work cannot read into it or write on it.
+  assert.equal((await request('deepa', 'POST', path, { text: 'who, me?' })).status, 403);
+  // And an empty line is not a message.
+  assert.equal((await request('preeti', 'POST', path, { text: '   ' })).status, 400);
 });
 
 test('everyone sees their own work and the work they passed on, nobody else', async t => {
   const { request } = await setup(t);
   const made = await request('owner', 'POST', '/', { title: 'Travelling job', assignedTo: 'ramya' });
   await request('owner', 'POST', '/', { title: 'Deepa only', assignedTo: 'deepa' });
-  await request('ramya', 'POST', `/${made.body._id}/reassign`, { to: 'preeti', reason: 'Too loaded' });
+  await request('owner', 'POST', `/${made.body._id}/reassign`, { to: 'preeti', reason: 'Ramya is loaded' });
 
   const titles = who => request(who, 'GET', '/').then(res => res.body.map(row => row.title).sort());
   assert.deepEqual(await titles('owner'), ['Deepa only', 'Travelling job']);
@@ -163,7 +183,7 @@ test('finishing, flagging and removing follow who is allowed to do them', async 
   assert.equal(done.body.doneByName, 'Ramya');
   assert.ok(done.body.doneAt);
   // Finished work cannot be handed on, and reopening clears who finished it.
-  assert.equal((await request('ramya', 'POST', `${path}/reassign`, { to: 'preeti', reason: 'late' })).status, 400);
+  assert.equal((await request('owner', 'POST', `${path}/reassign`, { to: 'preeti', reason: 'late' })).status, 400);
   const reopened = await request('owner', 'PUT', path, { status: 'open' });
   assert.equal(reopened.body.doneByName, '');
   assert.equal(reopened.body.doneAt, null);
@@ -172,4 +192,29 @@ test('finishing, flagging and removing follow who is allowed to do them', async 
   assert.equal((await request('ramya', 'DELETE', path)).status, 403);
   assert.equal((await request('owner', 'DELETE', path)).status, 200);
   assert.equal(data.Operation.length, 0);
+});
+
+test('a renamed account reads by its new name everywhere, even on old records', async t => {
+  const { request, data } = await setup(t);
+  const made = await request('owner', 'POST', '/', { title: 'Scrap follow-up', assignedTo: 'ramya' });
+  await request('owner', 'POST', `/${made.body._id}/reassign`, { to: 'preeti', reason: 'Ramya is loaded' });
+  await request('preeti', 'POST', `/${made.body._id}/message`, { text: 'On it' });
+  // Written into the record at the time, the way the floor said it that day.
+  assert.equal(made.body.assignments[0].fromName, 'MD');
+
+  // The MD renames the account; nothing in the saved records is rewritten.
+  data.User.find(user => user._id === 'owner').name = 'Managing Director';
+  data.User.find(user => user._id === 'preeti').name = 'Preeti S';
+
+  const [row] = (await request('owner', 'GET', '/')).body;
+  assert.equal(row.assignments[0].fromName, 'Managing Director');
+  assert.equal(row.assignments[1].byName, 'Managing Director');
+  assert.equal(row.assignments[1].toName, 'Preeti S');
+  assert.equal(row.assignedToName, 'Preeti S');
+  assert.equal(row.messages[0].byName, 'Preeti S');
+  // Somebody who has left keeps the name the record was written with.
+  assert.equal(row.assignments[1].fromName, 'Ramya');
+  data.User.splice(data.User.findIndex(user => user._id === 'ramya'), 1);
+  const [gone] = (await request('owner', 'GET', '/')).body;
+  assert.equal(gone.assignments[1].fromName, 'Ramya');
 });

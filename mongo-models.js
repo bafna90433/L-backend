@@ -142,6 +142,19 @@ const OperationSchema = new mongoose.Schema({
     reason: { type: String, default: '' },
     at: { type: Date, default: Date.now }
   }],
+  /**
+   * The conversation on this piece of work.
+   *
+   * The people holding it talk here instead of over the phone, so the MD can
+   * read what was said without asking anybody.
+   */
+  messages: [{
+    by: { type: String, default: '' },
+    byName: { type: String, default: '' },
+    byRole: { type: String, default: 'staff' },
+    text: { type: String, default: '' },
+    at: { type: Date, default: Date.now }
+  }],
   nextFollowup: { type: String, default: '' },
   createdBy: { type: String, default: '' },
   createdByName: { type: String, default: '' },

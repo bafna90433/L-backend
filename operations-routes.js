@@ -64,7 +64,29 @@ function createOperationsRouter(options = {}) {
   const fail = (message, statusCode = 400) => { throw Object.assign(new Error(message), { statusCode }); };
   const id = value => String(value?._id || value?.id || value || '');
   const plain = row => (row?.toObject ? row.toObject() : row);
-  const view = row => ({ ...plain(row), _id: id(row), assignments: (plain(row).assignments || []).map(hop => ({ ...hop })) });
+  const view = (row, names = new Map()) => {
+    const source = plain(row);
+    // A name written into a record is what the person was called that day. The
+    // account is the live answer, so it wins while it exists; the written copy
+    // is the fallback for somebody who has since left.
+    const now = (key, written) => names.get(String(key || '')) || written || '';
+    return {
+      ...source,
+      _id: id(row),
+      assignedToName: now(source.assignedTo, source.assignedToName),
+      createdByName: now(source.createdBy, source.createdByName),
+      doneByName: now(source.doneBy, source.doneByName),
+      assignments: (source.assignments || []).map(hop => ({
+        ...hop,
+        fromName: now(hop.from, hop.fromName),
+        toName: now(hop.to, hop.toName),
+        byName: now(hop.by, hop.byName)
+      })),
+      messages: (source.messages || []).map(line => ({ ...line, byName: now(line.by, line.byName) }))
+    };
+  };
+  /** Everyone's current name, by id — one read, however many rows it covers. */
+  const currentNames = async () => new Map((await User.find({})).map(user => [id(user), user.name]));
 
   /** Everyone still working here, minus the MD, who hands work out rather than taking it. */
   const staffList = async () => {
@@ -85,7 +107,8 @@ function createOperationsRouter(options = {}) {
   const visible = (row, me) => id(row.assignedTo) === me || (row.assignments || []).some(hop => String(hop.from) === me);
 
   router.get('/', auth, guard(async req => {
-    const rows = (await Operation.find({})).map(view);
+    const names = await currentNames();
+    const rows = (await Operation.find({})).map(row => view(row, names));
     const mine = req.user.role === 'owner' ? rows : rows.filter(row => visible(row, id(req.user)));
     return mine.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }));
@@ -120,18 +143,15 @@ function createOperationsRouter(options = {}) {
       createdByName: req.user.name || '',
       createdAt: now
     });
-    return view(created);
+    return view(created, await currentNames());
   }));
 
-  router.post('/:id/reassign', auth, guard(async req => {
+  router.post('/:id/reassign', auth, ownerOnly, guard(async req => {
     const row = await Operation.findById(req.params.id);
     if (!row) fail('That operation was not found.', 404);
     if (row.status === 'done') fail('This work is already finished, so it cannot be handed over.');
 
-    const isOwner = req.user.role === 'owner';
     const holder = id(row.assignedTo);
-    if (!isOwner && holder !== id(req.user)) fail('Only the person holding this work can hand it over.', 403);
-
     const reason = String(req.body?.reason || '').trim();
     if (!reason) fail('Say why you are handing this over.');
     const to = id(req.body?.to);
@@ -141,13 +161,39 @@ function createOperationsRouter(options = {}) {
     if (!taker || taker.isActive === false) fail('That staff member was not found.');
 
     row.assignments = [...(row.assignments || []), {
-      from: id(req.user), fromName: req.user.name || '', fromRole: isOwner ? 'owner' : 'staff',
+      // Where it came from is the person who had it, not whoever signed the
+      // move: that is what keeps the trail a chain.
+      from: holder, fromName: row.assignedToName || '', fromRole: 'staff',
+      by: id(req.user), byName: req.user.name || '', byRole: 'owner',
       to: id(taker), toName: taker.name || '', reason: reason.slice(0, 300), at: new Date()
     }];
     row.assignedTo = id(taker);
     row.assignedToName = taker.name || '';
     await row.save();
-    return view(row);
+    return view(row, await currentNames());
+  }));
+
+  /**
+   * A line in the conversation on this work.
+   *
+   * Anyone who has held it may write — including whoever handed it on, since
+   * they usually know what was already tried — and so may the MD, who reads
+   * the same thread rather than asking for a report.
+   */
+  router.post('/:id/message', auth, guard(async req => {
+    const row = await Operation.findById(req.params.id);
+    if (!row) fail('That operation was not found.', 404);
+    if (req.user.role !== 'owner' && !visible(plain(row), id(req.user))) fail('This work is not yours to write on.', 403);
+
+    const text = String(req.body?.text || '').trim();
+    if (!text) fail('Write something first.');
+
+    row.messages = [...(row.messages || []), {
+      by: id(req.user), byName: req.user.name || '', byRole: req.user.role === 'owner' ? 'owner' : 'staff',
+      text: text.slice(0, 1000), at: new Date()
+    }];
+    await row.save();
+    return view(row, await currentNames());
   }));
 
   router.put('/:id', auth, guard(async req => {
@@ -186,7 +232,7 @@ function createOperationsRouter(options = {}) {
       }
     }
     await row.save();
-    return view(row);
+    return view(row, await currentNames());
   }));
 
   router.delete('/:id', auth, ownerOnly, guard(async req => {

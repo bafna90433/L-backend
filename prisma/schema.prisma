@@ -192,6 +192,8 @@ model Operation {
   assignedTo     String    @default("")
   assignedToName String    @default("")
   assignments    Json      @default("[]")
+  /** What the people on this work said to each other, newest last. */
+  messages       Json      @default("[]")
   nextFollowup   String    @default("")
   createdBy      String    @default("")
   createdByName  String    @default("")
