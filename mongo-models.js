@@ -116,6 +116,41 @@ const TaskSchema = new mongoose.Schema({
 });
 
 
+
+/**
+ * An operation: a piece of work the MD hands out and then follows.
+ *
+ * It is kept apart from Task on purpose. Tasks are the office's own checklist;
+ * an operation is work the MD watches travel — who it went to first, who is
+ * holding it now, and why it moved. assignedTo is the person holding it, and
+ * `assignments` is the trail behind them. Ids and names are both stored, so
+ * the trail still reads correctly after somebody leaves.
+ */
+const OperationSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  details: { type: String, default: '' },
+  urgent: { type: Boolean, default: false },
+  status: { type: String, enum: ['open', 'done'], default: 'open' },
+  assignedTo: { type: String, default: '' },
+  assignedToName: { type: String, default: '' },
+  assignments: [{
+    from: { type: String, default: '' },
+    fromName: { type: String, default: '' },
+    fromRole: { type: String, default: 'staff' },
+    to: { type: String, default: '' },
+    toName: { type: String, default: '' },
+    reason: { type: String, default: '' },
+    at: { type: Date, default: Date.now }
+  }],
+  nextFollowup: { type: String, default: '' },
+  createdBy: { type: String, default: '' },
+  createdByName: { type: String, default: '' },
+  doneBy: { type: String, default: '' },
+  doneByName: { type: String, default: '' },
+  doneAt: { type: Date, default: null },
+  createdAt: { type: Date, default: Date.now }
+});
+
 const MessageSchema = new mongoose.Schema({
   sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   receiver: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -163,6 +198,7 @@ module.exports = {
   AdvanceRequest: model('AdvanceRequest', AdvanceRequestSchema),
   Reminder: model('Reminder', ReminderSchema),
   Task: model('Task', TaskSchema),
+  Operation: model('Operation', OperationSchema),
   Message: model('Message', MessageSchema),
   Department: model('Department', DepartmentSchema),
   SystemSettings: model('SystemSettings', SystemSettingsSchema),

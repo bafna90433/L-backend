@@ -465,7 +465,7 @@ function createProductionRouter(options = {}) {
       from: dayKey(from), to: dayKey(to), days, quantityKind: 'process-pieces', totals: { ...measure(total), entries: entries.length, workers: byWorker.size, otHours: Math.round(otMinutesTotal / 6) / 10, otDays: overtime.length, otWorkers: new Set(overtime.map(row => row.workerId)).size },
       overtime, overtimeGraceMinutes: rules.OVERTIME_GRACE_MINUTES,
       trainingTotals: subtotal(training), regularTotals: subtotal(regular),
-      trainingWorkers: [...byWorker.keys()].filter(key => training.some(row => id(row.labourId) === key)).map(key => ({ id: key, name: wm.get(key)?.name || 'Archived worker', ...subtotal(training.filter(row => id(row.labourId) === key)), ...schedules.get(key) })),
+      trainingWorkers: [...byWorker.keys()].filter(key => training.some(row => id(row.labourId) === key)).map(key => ({ id: key, name: wm.get(key)?.name || 'Archived worker', ...subtotal(training.filter(row => id(row.labourId) === key)), ...rules.readTrainingDates({}, schedules.get(key)) })),
       entries: viewEntries(entries, workers, toys, processes, types, schedules).sort((a, b) => b.date.localeCompare(a.date) || new Date(b.createdAt) - new Date(a.createdAt)),
       trend: [...trend.values()].map(row => ({ date: row.date, ...measure(row), workers: row.workers.size })),
       workers: [...byWorker].map(([key, total]) => {

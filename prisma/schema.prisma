@@ -179,6 +179,32 @@ model Reminder {
   @@index([status])
 }
 
+/**
+ * Work the MD hands out and then follows: who holds it now, and the trail of
+ * everyone who held it before. Kept apart from Task on purpose.
+ */
+model Operation {
+  id             String    @id @default(uuid())
+  title          String
+  details        String    @default("")
+  urgent         Boolean   @default(false)
+  status         String    @default("open")
+  assignedTo     String    @default("")
+  assignedToName String    @default("")
+  assignments    Json      @default("[]")
+  nextFollowup   String    @default("")
+  createdBy      String    @default("")
+  createdByName  String    @default("")
+  doneBy         String    @default("")
+  doneByName     String    @default("")
+  doneAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([status])
+  @@index([urgent])
+  @@index([assignedTo])
+}
+
 model Task {
   id                    String    @id @default(uuid())
   title                 String

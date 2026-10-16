@@ -57,6 +57,10 @@ const specs = {
       acknowledgedBy: { relation: 'acknowledger', model: 'User' }
     }
   },
+  Operation: {
+    delegate: 'operation',
+    fields: ['title', 'details', 'urgent', 'status', 'assignedTo', 'assignedToName', 'assignments', 'nextFollowup', 'createdBy', 'createdByName', 'doneBy', 'doneByName', 'doneAt', 'createdAt']
+  },
   Task: {
     delegate: 'task',
     fields: ['title', 'taskType', 'frequency', 'status', 'assignedTo', 'completedBy', 'completedAt', 'completionRequestedBy', 'completionRequestedAt', 'description', 'language', 'remarks', 'nextFollowup', 'comments', 'seenByOwner', 'seenAt', 'reminderDateTime', 'reminderAlarmArmed', 'reminderNote', 'createdAt'],
@@ -429,6 +433,7 @@ module.exports = {
   AdvanceRequest: createModel('AdvanceRequest'),
   Reminder: createModel('Reminder'),
   Task: createModel('Task'),
+  Operation: createModel('Operation'),
   Message: createModel('Message'),
   Department: createModel('Department'),
   SystemSettings: createModel('SystemSettings'),

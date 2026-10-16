@@ -518,3 +518,17 @@ test('HTTP group work saves one entry per member, shares the pieces and refuses 
   }
   assert.equal(data.ProductionEntry.length, before);
 });
+
+test('HTTP training marked on the entry reports empty dates rather than none at all', async t => {
+  const { request, entry } = await setup(t);
+  // w1 has no training period: the entry's own work type is what makes it
+  // training, and the report must still carry the two date fields.
+  assert.equal((await request('supervisor', 'POST', '/entries', entry({ workType: 'training', enteredByName: 'Ramya' }))).status, 200);
+  const report = await request('owner', 'GET', '/report?from=2026-10-05&to=2026-10-05');
+  const row = report.body.trainingWorkers.find(worker => worker.id === 'w1');
+  assert.equal(row.trainingStart, '');
+  assert.equal(row.trainingEnd, '');
+  assert.equal(report.body.trainingTotals.pieces, 100);
+  // And the entry itself reads as training wherever it is shown.
+  assert.equal((await request('owner', 'GET', '/day?date=2026-10-05')).body.entries[0].isTraining, true);
+});
