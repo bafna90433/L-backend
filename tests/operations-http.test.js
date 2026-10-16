@@ -11,7 +11,7 @@ const clone = value => structuredClone(value);
 function fixture() {
   const data = {
     User: [
-      { _id: 'owner', name: 'MD', role: 'owner', isActive: true },
+      { _id: 'owner', name: 'Owner Admin', role: 'owner', isActive: true },
       { _id: 'ramya', name: 'Ramya', role: 'staff', isActive: true },
       { _id: 'preeti', name: 'Preeti', role: 'staff', isActive: true },
       { _id: 'deepa', name: 'Deepa', role: 'staff', isActive: true },
@@ -106,30 +106,39 @@ test('the MD hands work out and the first hand-out starts the trail', async t =>
   }
 });
 
-test('only the MD moves work between people, and every hop keeps its reason', async t => {
+test('work may be handed on once by the floor, and no further', async t => {
   const { request } = await setup(t);
   const made = await request('owner', 'POST', '/', { title: 'Scrap follow-up', assignedTo: 'ramya' });
   const path = `/${made.body._id}/reassign`;
 
-  // The floor updates and talks; it does not move work, not even its own.
-  assert.equal((await request('ramya', 'POST', path, { to: 'preeti', reason: 'too loaded' })).status, 403);
+  // Not yours to move, and a reason is not optional.
   assert.equal((await request('preeti', 'POST', path, { to: 'deepa', reason: 'not mine' })).status, 403);
-  // A reason is not optional, and it has to go to somebody else.
-  assert.equal((await request('owner', 'POST', path, { to: 'preeti' })).status, 400);
-  assert.equal((await request('owner', 'POST', path, { to: 'ramya', reason: 'already there' })).status, 400);
+  assert.equal((await request('ramya', 'POST', path, { to: 'preeti' })).status, 400);
+  assert.equal((await request('ramya', 'POST', path, { to: 'ramya', reason: 'already there' })).status, 400);
 
-  const moved = await request('owner', 'POST', path, { to: 'preeti', reason: 'Ramya has four days of load' });
+  // The person it landed on may pass it to one other person.
+  const moved = await request('ramya', 'POST', path, { to: 'preeti', reason: 'Four days of load already' });
   assert.equal(moved.status, 200);
   assert.equal(moved.body.assignedToName, 'Preeti');
   assert.equal(moved.body.assignments.length, 2);
-  // The hop reads as the work moving off Ramya's desk, with the MD named as
-  // the one who moved it — both facts, not one standing in for the other.
   assert.equal(moved.body.assignments[1].fromName, 'Ramya');
-  assert.equal(moved.body.assignments[1].byName, 'MD');
-  assert.equal(moved.body.assignments[1].byRole, 'owner');
-  assert.equal(moved.body.assignments[1].reason, 'Ramya has four days of load');
+  assert.equal(moved.body.assignments[1].byRole, 'staff');
+  assert.equal(moved.body.assignments[1].reason, 'Four days of load already');
   // Each hop starts where the one before it ended.
   assert.equal(moved.body.assignments[0].to, moved.body.assignments[1].from);
+
+  // There it stops: the second holder does the work, they do not pass it round.
+  const again = await request('preeti', 'POST', path, { to: 'deepa', reason: 'I am busy too' });
+  assert.equal(again.status, 403);
+  assert.match(again.body.message, /already been handed over once/i);
+
+  // The MD is not bound by that.
+  const byMD = await request('owner', 'POST', path, { to: 'deepa', reason: 'Preeti is on leave' });
+  assert.equal(byMD.status, 200);
+  assert.equal(byMD.body.assignments.length, 3);
+  assert.equal(byMD.body.assignments[2].byName, 'MD');
+  assert.equal(byMD.body.assignments[2].byRole, 'owner');
+  assert.equal(byMD.body.assignments[2].fromName, 'Preeti');
 });
 
 test('the people on a piece of work talk on it, and the MD reads the same thread', async t => {
@@ -156,7 +165,7 @@ test('everyone sees their own work and the work they passed on, nobody else', as
   const { request } = await setup(t);
   const made = await request('owner', 'POST', '/', { title: 'Travelling job', assignedTo: 'ramya' });
   await request('owner', 'POST', '/', { title: 'Deepa only', assignedTo: 'deepa' });
-  await request('owner', 'POST', `/${made.body._id}/reassign`, { to: 'preeti', reason: 'Ramya is loaded' });
+  await request('ramya', 'POST', `/${made.body._id}/reassign`, { to: 'preeti', reason: 'Ramya is loaded' });
 
   const titles = who => request(who, 'GET', '/').then(res => res.body.map(row => row.title).sort());
   assert.deepEqual(await titles('owner'), ['Deepa only', 'Travelling job']);
@@ -217,4 +226,24 @@ test('a renamed account reads by its new name everywhere, even on old records', 
   data.User.splice(data.User.findIndex(user => user._id === 'ramya'), 1);
   const [gone] = (await request('owner', 'GET', '/')).body;
   assert.equal(gone.assignments[1].fromName, 'Ramya');
+});
+
+test('the MD reads as MD whatever the login was set up as', async t => {
+  const { request, data } = await setup(t);
+  // The account is still called "Owner Admin", which is nobody's name on the floor.
+  const made = await request('owner', 'POST', '/', { title: 'Scrap follow-up', assignedTo: 'ramya' });
+  assert.equal(made.body.assignments[0].fromName, 'MD');
+  assert.equal(made.body.createdByName, 'MD');
+
+  await request('owner', 'POST', `/${made.body._id}/message`, { text: 'Close it by Friday' });
+  const [row] = (await request('ramya', 'GET', '/')).body;
+  assert.equal(row.messages[0].byName, 'MD');
+
+  // An owner given a real name keeps it — the rule only covers the set-up name.
+  data.User.find(user => user._id === 'owner').name = 'Sir Bafna';
+  const [renamed] = (await request('ramya', 'GET', '/')).body;
+  assert.equal(renamed.assignments[0].fromName, 'Sir Bafna');
+  assert.equal(renamed.messages[0].byName, 'Sir Bafna');
+  // And staff names are never rewritten, whatever they contain.
+  assert.equal(renamed.assignments[0].toName, 'Ramya');
 });

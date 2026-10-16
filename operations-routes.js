@@ -85,8 +85,20 @@ function createOperationsRouter(options = {}) {
       messages: (source.messages || []).map(line => ({ ...line, byName: now(line.by, line.byName) }))
     };
   };
-  /** Everyone's current name, by id — one read, however many rows it covers. */
-  const currentNames = async () => new Map((await User.find({})).map(user => [id(user), user.name]));
+  /**
+   * What each person is called, by id — one read, however many rows it covers.
+   *
+   * The MD's login is usually left with the name it was set up with, "Owner
+   * Admin", but nobody in the factory calls them that. So an owner account
+   * still carrying a set-up name is shown as MD; an owner who has been given a
+   * real name keeps it, and everyone else is simply their own name.
+   */
+  const shownName = user => {
+    const name = String(user.name || '').trim();
+    if (user.role !== 'owner') return name;
+    return !name || /owner|admin/i.test(name) ? 'MD' : name;
+  };
+  const currentNames = async () => new Map((await User.find({})).map(user => [id(user), shownName(user)]));
 
   /** Everyone still working here, minus the MD, who hands work out rather than taking it. */
   const staffList = async () => {
@@ -146,12 +158,28 @@ function createOperationsRouter(options = {}) {
     return view(created, await currentNames());
   }));
 
-  router.post('/:id/reassign', auth, ownerOnly, guard(async req => {
+  /**
+   * Handing the work on.
+   *
+   * The MD gives it out, and the person it lands on may pass it to one other
+   * person when their own load is too heavy. There it stops: the second holder
+   * does the work rather than passing it round, so a job cannot travel the
+   * floor. The MD is not bound by that and can move it at any time.
+   */
+  router.post('/:id/reassign', auth, guard(async req => {
     const row = await Operation.findById(req.params.id);
     if (!row) fail('That operation was not found.', 404);
     if (row.status === 'done') fail('This work is already finished, so it cannot be handed over.');
 
+    const isOwner = req.user.role === 'owner';
     const holder = id(row.assignedTo);
+    // The first hop is the MD handing it out; a second one is the one handover
+    // the floor is allowed.
+    const alreadyPassedOn = (row.assignments || []).length > 1;
+    if (!isOwner) {
+      if (holder !== id(req.user)) fail('Only the person holding this work can hand it over.', 403);
+      if (alreadyPassedOn) fail('This work has already been handed over once. Ask the MD to move it again.', 403);
+    }
     const reason = String(req.body?.reason || '').trim();
     if (!reason) fail('Say why you are handing this over.');
     const to = id(req.body?.to);
@@ -164,7 +192,7 @@ function createOperationsRouter(options = {}) {
       // Where it came from is the person who had it, not whoever signed the
       // move: that is what keeps the trail a chain.
       from: holder, fromName: row.assignedToName || '', fromRole: 'staff',
-      by: id(req.user), byName: req.user.name || '', byRole: 'owner',
+      by: id(req.user), byName: shownName(req.user), byRole: isOwner ? 'owner' : 'staff',
       to: id(taker), toName: taker.name || '', reason: reason.slice(0, 300), at: new Date()
     }];
     row.assignedTo = id(taker);
