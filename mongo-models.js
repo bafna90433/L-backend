@@ -158,6 +158,10 @@ const OperationSchema = new mongoose.Schema({
   nextFollowup: { type: String, default: '' },
   createdBy: { type: String, default: '' },
   createdByName: { type: String, default: '' },
+  // The floor finishes the work and says so; the MD is the one who closes it.
+  doneRequestedBy: { type: String, default: '' },
+  doneRequestedByName: { type: String, default: '' },
+  doneRequestedAt: { type: Date, default: null },
   doneBy: { type: String, default: '' },
   doneByName: { type: String, default: '' },
   doneAt: { type: Date, default: null },

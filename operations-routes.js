@@ -76,6 +76,7 @@ function createOperationsRouter(options = {}) {
       assignedToName: now(source.assignedTo, source.assignedToName),
       createdByName: now(source.createdBy, source.createdByName),
       doneByName: now(source.doneBy, source.doneByName),
+      doneRequestedByName: now(source.doneRequestedBy, source.doneRequestedByName),
       assignments: (source.assignments || []).map(hop => ({
         ...hop,
         fromName: now(hop.from, hop.fromName),
@@ -151,6 +152,9 @@ function createOperationsRouter(options = {}) {
         to: id(taker), toName: taker.name || '', reason: 'First assignment', at: now
       }],
       nextFollowup: String(body.nextFollowup || '').trim().slice(0, 40),
+    doneRequestedBy: '',
+    doneRequestedByName: '',
+    doneRequestedAt: null,
       createdBy: id(req.user),
       createdByName: req.user.name || '',
       createdAt: now
@@ -224,6 +228,31 @@ function createOperationsRouter(options = {}) {
     return view(row, await currentNames());
   }));
 
+  /**
+   * "I have finished this."
+   *
+   * The person holding the work says so and the MD closes it, so the two are
+   * never in doubt about who decided it was done. The word goes into the
+   * conversation as well, because that is where the MD is already reading.
+   */
+  router.post('/:id/request-done', auth, guard(async req => {
+    const row = await Operation.findById(req.params.id);
+    if (!row) fail('That operation was not found.', 404);
+    if (row.status === 'done') fail('This work is already closed.');
+    if (id(row.assignedTo) !== id(req.user)) fail('Only the person holding this work can mark it done.', 403);
+
+    const note = String(req.body?.note || '').trim();
+    row.doneRequestedBy = id(req.user);
+    row.doneRequestedByName = req.user.name || '';
+    row.doneRequestedAt = new Date();
+    row.messages = [...(row.messages || []), {
+      by: id(req.user), byName: req.user.name || '', byRole: 'staff',
+      text: note ? `Finished — ${note.slice(0, 900)}` : 'Finished. Waiting for the MD to close it.', at: new Date()
+    }];
+    await row.save();
+    return view(row, await currentNames());
+  }));
+
   router.put('/:id', auth, guard(async req => {
     const row = await Operation.findById(req.params.id);
     if (!row) fail('That operation was not found.', 404);
@@ -244,14 +273,24 @@ function createOperationsRouter(options = {}) {
       if (!title) fail('The work needs a name.');
       row.title = title.slice(0, 200);
     }
+    // The MD can wave away a claim that the work is finished without closing it.
+    if (body.doneRequested === false) {
+      row.doneRequestedBy = '';
+      row.doneRequestedByName = '';
+      row.doneRequestedAt = null;
+    }
     if (body.status !== undefined) {
       const status = String(body.status);
       if (!['open', 'done'].includes(status)) fail('Status must be open or done.');
       if (status === 'done' && row.status !== 'done') {
         row.status = 'done';
-        row.doneBy = id(req.user);
-        row.doneByName = req.user.name || '';
+        // Credit goes to whoever did the work, not to whoever signed it off.
+        row.doneBy = row.doneRequestedBy || id(req.user);
+        row.doneByName = row.doneRequestedByName || req.user.name || '';
         row.doneAt = new Date();
+        row.doneRequestedBy = '';
+        row.doneRequestedByName = '';
+        row.doneRequestedAt = null;
       } else if (status === 'open' && row.status !== 'open') {
         row.status = 'open';
         row.doneBy = '';

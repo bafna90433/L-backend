@@ -252,3 +252,35 @@ test('the MD reads as MD whatever the login was set up as', async t => {
   // And staff names are never rewritten, whatever they contain.
   assert.equal(renamed.assignments[0].toName, 'Ramya');
 });
+
+test('the floor says the work is finished and the MD closes it', async t => {
+  const { request } = await setup(t);
+  const made = await request('owner', 'POST', '/', { title: 'Chase the pending payment', assignedTo: 'ramya' });
+  const op = `/${made.body._id}`;
+
+  // Only the person holding it can say it is finished.
+  assert.equal((await request('preeti', 'POST', `${op}/request-done`, { note: 'paid' })).status, 403);
+
+  const said = await request('ramya', 'POST', `${op}/request-done`, { note: 'Customer paid this morning' });
+  assert.equal(said.status, 200);
+  assert.equal(said.body.doneRequestedByName, 'Ramya');
+  assert.ok(said.body.doneRequestedAt);
+  // It is still open until the MD closes it, and the word is in the thread.
+  assert.equal(said.body.status, 'open');
+  assert.equal(said.body.messages.at(-1).text, 'Finished — Customer paid this morning');
+
+  // The MD can wave the claim away without closing the work.
+  const waved = await request('owner', 'PUT', op, { doneRequested: false });
+  assert.equal(waved.body.doneRequestedByName, '');
+  assert.equal(waved.body.status, 'open');
+
+  // Or close it — and the credit stays with whoever did the work.
+  await request('ramya', 'POST', `${op}/request-done`, {});
+  const closed = await request('owner', 'PUT', op, { status: 'done' });
+  assert.equal(closed.body.status, 'done');
+  assert.equal(closed.body.doneByName, 'Ramya');
+  assert.equal(closed.body.doneRequestedByName, '');
+  assert.ok(closed.body.doneAt);
+  // Closed work cannot be claimed finished again.
+  assert.equal((await request('ramya', 'POST', `${op}/request-done`, {})).status, 400);
+});

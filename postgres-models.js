@@ -59,7 +59,7 @@ const specs = {
   },
   Operation: {
     delegate: 'operation',
-    fields: ['title', 'details', 'urgent', 'status', 'assignedTo', 'assignedToName', 'assignments', 'messages', 'nextFollowup', 'createdBy', 'createdByName', 'doneBy', 'doneByName', 'doneAt', 'createdAt']
+    fields: ['title', 'details', 'urgent', 'status', 'assignedTo', 'assignedToName', 'assignments', 'messages', 'nextFollowup', 'createdBy', 'createdByName', 'doneRequestedBy', 'doneRequestedByName', 'doneRequestedAt', 'doneBy', 'doneByName', 'doneAt', 'createdAt']
   },
   Task: {
     delegate: 'task',

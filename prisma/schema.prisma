@@ -197,6 +197,10 @@ model Operation {
   nextFollowup   String    @default("")
   createdBy      String    @default("")
   createdByName  String    @default("")
+  /** The floor finishes the work and says so; the MD is the one who closes it. */
+  doneRequestedBy     String    @default("")
+  doneRequestedByName String    @default("")
+  doneRequestedAt     DateTime?
   doneBy         String    @default("")
   doneByName     String    @default("")
   doneAt         DateTime?
