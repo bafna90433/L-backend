@@ -187,6 +187,11 @@ test('finishing, flagging and removing follow who is allowed to do them', async 
   // The holder can raise the flag and close the work; a bystander cannot.
   assert.equal((await request('deepa', 'PUT', path, { urgent: true })).status, 403);
   assert.equal((await request('ramya', 'PUT', path, { urgent: true })).body.urgent, true);
+  // The follow-up date is the holder's to keep current, and the MD sees it.
+  assert.equal((await request('ramya', 'PUT', path, { nextFollowup: '2026-10-24' })).body.nextFollowup, '2026-10-24');
+  assert.equal((await request('owner', 'GET', '/')).body[0].nextFollowup, '2026-10-24');
+  assert.equal((await request('ramya', 'PUT', path, { nextFollowup: '' })).body.nextFollowup, '');
+  assert.equal((await request('deepa', 'PUT', path, { nextFollowup: '2026-11-01' })).status, 403);
   const done = await request('ramya', 'PUT', path, { status: 'done' });
   assert.equal(done.body.status, 'done');
   assert.equal(done.body.doneByName, 'Ramya');
