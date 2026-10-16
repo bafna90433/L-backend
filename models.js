@@ -182,6 +182,10 @@ const OperationSchema = new mongoose.Schema({
     at: { type: Date, default: Date.now }
   }],
   nextFollowup: { type: String, default: '' },
+  // What the follow-up is about, in the words of whoever is chasing it:
+  // "customer said three days". Kept beside the date, not in the thread, so
+  // the row answers "where has this got to" without opening anything.
+  followupNote: { type: String, default: '' },
   createdBy: { type: String, default: '' },
   createdByName: { type: String, default: '' },
   // The floor finishes the work and says so; the MD is the one who closes it.

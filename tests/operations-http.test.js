@@ -191,6 +191,11 @@ test('finishing, flagging and removing follow who is allowed to do them', async 
   assert.equal((await request('ramya', 'PUT', path, { nextFollowup: '2026-10-24' })).body.nextFollowup, '2026-10-24');
   assert.equal((await request('owner', 'GET', '/')).body[0].nextFollowup, '2026-10-24');
   assert.equal((await request('ramya', 'PUT', path, { nextFollowup: '' })).body.nextFollowup, '');
+  // What the customer actually said sits beside the date, not in the thread.
+  assert.equal((await request('ramya', 'PUT', path, { followupNote: '  Will pay in 3 days  ' })).body.followupNote, 'Will pay in 3 days');
+  assert.equal((await request('owner', 'GET', '/')).body[0].followupNote, 'Will pay in 3 days');
+  assert.equal((await request('ramya', 'PUT', path, { followupNote: '' })).body.followupNote, '');
+  assert.equal((await request('deepa', 'PUT', path, { followupNote: 'not mine' })).status, 403);
   assert.equal((await request('deepa', 'PUT', path, { nextFollowup: '2026-11-01' })).status, 403);
   const done = await request('ramya', 'PUT', path, { status: 'done' });
   assert.equal(done.body.status, 'done');

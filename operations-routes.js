@@ -152,6 +152,7 @@ function createOperationsRouter(options = {}) {
         to: id(taker), toName: taker.name || '', reason: 'First assignment', at: now
       }],
       nextFollowup: String(body.nextFollowup || '').trim().slice(0, 40),
+    followupNote: String(body.followupNote || '').trim().slice(0, 300),
     doneRequestedBy: '',
     doneRequestedByName: '',
     doneRequestedAt: null,
@@ -267,6 +268,7 @@ function createOperationsRouter(options = {}) {
     // only the MD rewrites what the work is.
     if (body.urgent !== undefined) row.urgent = Boolean(body.urgent);
     if (body.nextFollowup !== undefined) row.nextFollowup = String(body.nextFollowup).trim().slice(0, 40);
+    if (body.followupNote !== undefined) row.followupNote = String(body.followupNote).trim().slice(0, 300);
     if (body.details !== undefined) row.details = String(body.details).trim().slice(0, 1000);
     if (isOwner && body.title !== undefined) {
       const title = String(body.title).trim();
