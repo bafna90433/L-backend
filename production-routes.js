@@ -9,6 +9,7 @@ const SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123
 
 function createProductionRouter(options = {}) {
   const models = options.models || productionModels(require('./models'));
+  const { StockRecipe, StockMove } = models;
   const resolveAccess = options.resolveAccess || require('./access-control').resolveUserAccess;
   const atomic = options.transaction || transaction;
   const { User, Labour, ToyType, Toy, ToyProcess, ProductionEntry, ProductionLog, DamageEntry, DamagePart, SystemSettings } = models;
@@ -365,9 +366,42 @@ function createProductionRouter(options = {}) {
       return { ...workerView(worker), isTraining: rules.isTrainingOn(schedules.get(id(worker)), date) };
     }).sort((a, b) => a.name.localeCompare(b.name)), entries: viewEntries(entries, workers, toys, processes, types, schedules).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)) };
   }));
+  /**
+   * What a saved entry spends off the shelf.
+   *
+   * The recipe hangs off the work step, so an entry of 400 pieces of body
+   * assembly spends 400 times whatever that step uses. Every movement carries
+   * the entry id, which is what lets a correction or a deletion take exactly
+   * those movements back and nothing else.
+   *
+   * Stock never stands in the way of recording work: if the shelf cannot
+   * answer, the entry is still saved and the shortage shows up on the stock
+   * page, because the floor's record of what it made is the more important of
+   * the two.
+   */
+  const spendStock = async (req, entry) => {
+    if (!StockRecipe || !StockMove) return;
+    const lines = (await StockRecipe.find({})).filter(row => id(row.toyId) === id(entry.toyId) && id(row.processId) === id(entry.processId));
+    for (const line of lines) {
+      const per = Number(line.per) || 1, each = Number(line.qty) || 0;
+      if (!each) continue;
+      await StockMove.create({
+        date: entry.date, itemId: id(line.itemId), qty: -(Number(entry.pieces || 0) * each / per),
+        reason: 'production', entryId: id(entry), toyId: id(entry.toyId), processId: id(entry.processId),
+        pieces: Number(entry.pieces || 0), note: '', byName: req.user.name || '', createdAt: new Date()
+      });
+    }
+  };
+  /** Take back what an entry spent, so it can be re-applied or forgotten. */
+  const unspendStock = async entryId => {
+    if (!StockMove) return;
+    await StockMove.deleteMany({ entryId: id(entryId), reason: 'production' });
+  };
+
   router.post('/entries', auth, write, handle(async req => {
     const data = readEntry(req.body || {}), { worker, toy, process } = await validateSelection(data);
     const created = await ProductionEntry.create({ ...data, enteredBy: id(req.user), enteredByName: recorderName(req.body || {}, req.user.name), createdAt: new Date(), updatedAt: new Date() });
+    await spendStock(req, created);
     await audit(req, 'entry-created', `${worker.name} — ${toy.name} / ${process.name} — ${data.pieces} pcs in ${data.minutes} min`, null, created, id(created));
     return { id: id(created) };
   }, true));
@@ -397,7 +431,12 @@ function createProductionRouter(options = {}) {
       const data = readEntry({ ...body, labourId, pieces: shares[index], groupId, groupName });
       const { worker, toy, process } = await validateSelection(data);
       job = { toy, process };
-      created.push({ worker, row: await ProductionEntry.create({ ...data, enteredBy: id(req.user), enteredByName: recorderName(body, req.user.name), createdAt: new Date(), updatedAt: new Date() }) });
+      const row = await ProductionEntry.create({ ...data, enteredBy: id(req.user), enteredByName: recorderName(body, req.user.name), createdAt: new Date(), updatedAt: new Date() });
+      // Each member holds a share of the same batch, so the shares add up to
+      // the batch and the shelf falls by the batch, not by the batch times the
+      // number of people.
+      await spendStock(req, row);
+      created.push({ worker, row });
     }
     const { toy, process } = job;
     await audit(req, 'entry-group-created', `Group "${groupName}" (${created.map(row => row.worker.name).join(', ')}) — ${toy.name} / ${process.name} — ${pieces} pcs in ${created[0].row.minutes} min each`, null, { groupId, groupName, pieces, labourIds }, groupId);
@@ -407,12 +446,16 @@ function createProductionRouter(options = {}) {
     const before = await get(ProductionEntry, req.params.id, 'Entry'), data = readEntry({ ...plain(before), ...req.body });
     await validateSelection(data);
     const after = await ProductionEntry.findByIdAndUpdate(req.params.id, { ...data, enteredByName: recorderName(req.body || {}, before.enteredByName), updatedAt: new Date() }, { new: true });
+    // A corrected entry spends afresh: the old movements go, the new ones land.
+    await unspendStock(req.params.id);
+    await spendStock(req, after);
     await audit(req, 'entry-updated', `Edited production — ${data.pieces} pcs in ${data.minutes} min`, before, after, id(before));
     return { id: id(after) };
   }, true));
   router.delete('/entries/:id', auth, write, handle(async req => {
     const before = await get(ProductionEntry, req.params.id, 'Entry');
     await ProductionEntry.deleteOne({ _id: req.params.id });
+    await unspendStock(req.params.id);
     await audit(req, 'entry-deleted', `Removed production entry of ${before.pieces} pcs`, before, null, id(before));
     return { ok: true };
   }, true));

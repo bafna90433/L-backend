@@ -112,6 +112,18 @@ const specs = {
       processId: { relation: 'process', model: 'ToyProcess' }
     }
   },
+  StockItem: {
+    delegate: 'stockItem',
+    fields: ['code', 'name', 'kind', 'unit', 'toyId', 'opening', 'minLevel', 'isActive', 'createdAt']
+  },
+  StockRecipe: {
+    delegate: 'stockRecipe',
+    fields: ['toyId', 'processId', 'itemId', 'qty', 'per', 'note', 'createdAt']
+  },
+  StockMove: {
+    delegate: 'stockMove',
+    fields: ['date', 'itemId', 'qty', 'reason', 'entryId', 'toyId', 'processId', 'pieces', 'note', 'byName', 'createdAt']
+  },
   DamagePart: {
     delegate: 'damagePart',
     fields: ['name', 'toyId', 'isActive', 'createdAt']
@@ -445,6 +457,9 @@ module.exports = {
   ProductionEntry: createModel('ProductionEntry'),
   DamageEntry: createModel('DamageEntry'),
   DamagePart: createModel('DamagePart'),
+  StockItem: createModel('StockItem'),
+  StockRecipe: createModel('StockRecipe'),
+  StockMove: createModel('StockMove'),
   ProductionLog: createModel('ProductionLog'),
   __testing: { specs, translateWhere, cleanData, uniqueWhereForUpsert }
 };

@@ -21,7 +21,8 @@ function fixture() {
     ToyType: [{ _id: 'type', name: 'Friction', isActive: true }],
     Toy: [{ _id: 'toy', name: 'Bird', typeId: 'type', isActive: true }, { _id: 'toy2', name: 'Fish', typeId: 'type', isActive: true }],
     ToyProcess: [{ _id: 'process', name: 'Body assembly', toyId: 'toy', isActive: true }, { _id: 'process2', name: 'Wheel joint', toyId: 'toy2', isActive: true }],
-    ProductionDay: [], ProductionEntry: [], ProductionLog: [], DamageEntry: [], DamagePart: [], SystemSettings: []
+    ProductionDay: [], ProductionEntry: [], ProductionLog: [], DamageEntry: [], DamagePart: [], SystemSettings: [],
+    StockItem: [], StockRecipe: [], StockMove: []
   };
   let seq = 0, failAudit = false, tail = Promise.resolve();
   const matches = (row, where) => Object.entries(where).every(([key, value]) => {
@@ -37,7 +38,8 @@ function fixture() {
     create: async payload => { if (name === 'ProductionLog' && failAudit) throw new Error('Audit unavailable'); const row = { _id: `${name}-${++seq}`, ...clone(payload) }; data[name].push(row); return clone(row); },
     findByIdAndUpdate: async (key, update) => { const row = data[name].find(row => row._id === key); if (!row) return null; Object.assign(row, clone(update)); return clone(row); },
     findOneAndUpdate: async (where, update, options) => { let row = data[name].find(row => matches(row, where)); if (!row && options.upsert) { row = { _id: `${name}-${++seq}`, ...clone(where) }; data[name].push(row); } if (!row) return null; Object.assign(row, clone(update)); return clone(row); },
-    deleteOne: async where => { const index = data[name].findIndex(row => matches(row, where)); if (index >= 0) data[name].splice(index, 1); }
+    deleteOne: async where => { const index = data[name].findIndex(row => matches(row, where)); if (index >= 0) data[name].splice(index, 1); },
+    deleteMany: async (where = {}) => { const kept = data[name].filter(row => !matches(row, where)); const removed = data[name].length - kept.length; data[name] = kept; return { deletedCount: removed }; }
   }]));
   // This isolated transaction fixture tests route rollback and cumulative writes.
   // Provider-specific transactions are inspected separately, without live data.
@@ -531,4 +533,47 @@ test('HTTP training marked on the entry reports empty dates rather than none at 
   assert.equal(report.body.trainingTotals.pieces, 100);
   // And the entry itself reads as training wherever it is shown.
   assert.equal((await request('owner', 'GET', '/day?date=2026-10-05')).body.entries[0].isTraining, true);
+});
+
+test('HTTP saved work spends the shelf, and a correction gives it back', async t => {
+  const { request, entry, data } = await setup(t);
+  // Body assembly of the Bird eats eight SC-2 screws a piece, and its packing
+  // takes one box per eight pieces.
+  data.StockItem.push({ _id: 'screw', name: 'Screw SC-2', code: 'SC-2', unit: 'pcs', opening: 10000, isActive: true });
+  data.StockItem.push({ _id: 'box', name: 'Windup box', code: '', unit: 'box', opening: 500, isActive: true });
+  data.StockRecipe.push({ _id: 'r1', toyId: 'toy', processId: 'process', itemId: 'screw', qty: 8, per: 1 });
+  data.StockRecipe.push({ _id: 'r2', toyId: 'toy', processId: 'process', itemId: 'box', qty: 1, per: 8 });
+
+  const made = await request('supervisor', 'POST', '/entries', entry({ pieces: 400, enteredByName: 'Ramya' }));
+  assert.equal(made.status, 200);
+  const spent = () => Object.fromEntries(data.StockMove.map(move => [move.itemId, move.qty]));
+  assert.deepEqual(spent(), { screw: -3200, box: -50 });
+  assert.equal(data.StockMove[0].entryId, made.body.id);
+  assert.equal(data.StockMove[0].reason, 'production');
+
+  // Corrected downwards: the old movements go, the new ones land in their place.
+  await request('supervisor', 'PUT', `/entries/${made.body.id}`, { pieces: 200 });
+  assert.deepEqual(spent(), { screw: -1600, box: -25 });
+  assert.equal(data.StockMove.length, 2);
+
+  // Removed: the shelf gets all of it back.
+  await request('supervisor', 'DELETE', `/entries/${made.body.id}`);
+  assert.equal(data.StockMove.length, 0);
+
+  // A work step with nothing mapped to it spends nothing.
+  await request('supervisor', 'POST', '/entries', entry({ toyId: 'toy2', processId: 'process2', pieces: 90, enteredByName: 'Ramya' }));
+  assert.equal(data.StockMove.length, 0);
+});
+
+test('HTTP a group shares one batch, so the shelf falls once', async t => {
+  const { request, entry, data } = await setup(t);
+  data.StockItem.push({ _id: 'wing', name: 'Wing', code: 'FG6', unit: 'pcs', opening: 5000, isActive: true });
+  data.StockRecipe.push({ _id: 'r1', toyId: 'toy', processId: 'process', itemId: 'wing', qty: 2, per: 1 });
+
+  await request('supervisor', 'POST', '/entries/group', entry({
+    labourId: undefined, labourIds: ['w1', 'w2'], groupName: 'Assembly line', pieces: 900, minutes: 540, enteredByName: 'Ramya'
+  }));
+  // Two members, 900 pieces between them, 1,800 wings — not 3,600.
+  assert.equal(data.StockMove.reduce((sum, move) => sum + move.qty, 0), -1800);
+  assert.equal(data.StockMove.length, 2);
 });

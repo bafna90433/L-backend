@@ -483,6 +483,66 @@ model ProductionEntry {
 /**
  * Every change kept, so a corrected number can always be traced back.
  */
+/**
+ * A part, a screw or packing material: anything kept on a shelf and spent when
+ * something is made. An empty toyId means it is common to every toy.
+ */
+model StockItem {
+  id        String   @id @default(uuid())
+  code      String   @default("")
+  name      String
+  kind      String   @default("part")
+  unit      String   @default("pcs")
+  toyId     String   @default("")
+  opening   Float    @default(0)
+  minLevel  Float    @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([toyId])
+  @@index([isActive])
+}
+
+/**
+ * What one work step spends to make a piece, written as "qty per per pieces".
+ */
+model StockRecipe {
+  id        String   @id @default(uuid())
+  toyId     String
+  processId String
+  itemId    String
+  qty       Float    @default(1)
+  per       Float    @default(1)
+  note      String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([toyId, processId])
+  @@index([itemId])
+}
+
+/**
+ * Every movement of stock, with what caused it. Balances are read from these,
+ * never written: a corrected production entry reverses its own movements.
+ */
+model StockMove {
+  id        String   @id @default(uuid())
+  date      DateTime
+  itemId    String
+  qty       Float    @default(0)
+  reason    String   @default("inward")
+  entryId   String   @default("")
+  toyId     String   @default("")
+  processId String   @default("")
+  pieces    Float    @default(0)
+  note      String   @default("")
+  byName    String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([itemId])
+  @@index([entryId])
+  @@index([date])
+}
+
 model DamagePart {
   id        String   @id @default(uuid())
   name      String

@@ -331,6 +331,65 @@ const ProductionLogSchema = new mongoose.Schema({
 
 // Damaged parts are their own small catalogue. A part is born the first time
 // the floor types it, and lives on so it can be picked and renamed later.
+
+/**
+ * A part, a screw or a piece of packing material — anything the factory keeps
+ * on a shelf and spends when it makes something.
+ *
+ * `toyId` empty means the item is common to every toy, which is how screws
+ * behave: one shelf, drawn down by whatever is being made that day.
+ */
+const StockItemSchema = new mongoose.Schema({
+  code: { type: String, default: '' },
+  name: { type: String, required: true },
+  kind: { type: String, enum: ['part', 'screw', 'packing'], default: 'part' },
+  unit: { type: String, default: 'pcs' },
+  toyId: { type: String, default: '' },
+  opening: { type: Number, default: 0 },
+  minLevel: { type: Number, default: 0 },
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+/**
+ * What a work step spends to make one piece.
+ *
+ * It hangs off the work step, not the toy, because that is where the spending
+ * happens: body assembly eats screws and wings, packing eats boxes and trays.
+ * `qty per per` is written the way the floor says it — "1 windup box per 8
+ * pieces" — so nobody has to think in fractions.
+ */
+const StockRecipeSchema = new mongoose.Schema({
+  toyId: { type: String, required: true },
+  processId: { type: String, required: true },
+  itemId: { type: String, required: true },
+  qty: { type: Number, default: 1 },
+  per: { type: Number, default: 1 },
+  note: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+/**
+ * Every movement of stock, in or out, with what caused it.
+ *
+ * Nothing edits a balance directly: the balance is the opening figure plus
+ * these. A production entry that is corrected or removed reverses its own
+ * movements, so the shelf always matches what the floor actually recorded.
+ */
+const StockMoveSchema = new mongoose.Schema({
+  date: { type: Date, required: true },
+  itemId: { type: String, required: true },
+  qty: { type: Number, default: 0 },
+  reason: { type: String, enum: ['inward', 'production', 'damage', 'adjust'], default: 'inward' },
+  entryId: { type: String, default: '' },
+  toyId: { type: String, default: '' },
+  processId: { type: String, default: '' },
+  pieces: { type: Number, default: 0 },
+  note: { type: String, default: '' },
+  byName: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+});
+
 const DamagePartSchema = new mongoose.Schema({
   name: { type: String, required: true },
   toyId: { type: String, default: '' },
@@ -361,6 +420,10 @@ const ProductionEntry = mongoose.model('ProductionEntry', ProductionEntrySchema)
 const ProductionLog = mongoose.model('ProductionLog', ProductionLogSchema);
 const DamageEntry = mongoose.model('DamageEntry', DamageEntrySchema);
 const DamagePart = mongoose.model('DamagePart', DamagePartSchema);
+const StockItem = mongoose.model('StockItem', StockItemSchema);
+const StockRecipe = mongoose.model('StockRecipe', StockRecipeSchema);
+const StockMove = mongoose.model('StockMove', StockMoveSchema);
+
 
 const SystemSettings = mongoose.model('SystemSettings', SystemSettingsSchema);
 const DeletedLog = mongoose.model('DeletedLog', DeletedLogSchema);
@@ -385,6 +448,9 @@ module.exports = {
   ProductionEntry,
   ProductionLog,
   DamageEntry,
-  DamagePart
+  DamagePart,
+  StockItem,
+  StockRecipe,
+  StockMove
 };
 }

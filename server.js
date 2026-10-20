@@ -10,6 +10,7 @@ const announceRoutes = require('./announce-routes');
 const amazonRoutes = require('./amazon-routes');
 const productionRoutes = require('./production-routes');
 const operationsRoutes = require('./operations-routes');
+const stockRoutes = require('./stock-routes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -38,6 +39,7 @@ app.use('/api/announce', announceRoutes);
 app.use('/api/amazon', amazonRoutes);
 app.use('/api/production', productionRoutes);
 app.use('/api/operations', operationsRoutes);
+app.use('/api/stock', stockRoutes);
 app.use('/api', apiRoutes);
 
 // Simple status endpoint
