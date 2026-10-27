@@ -88,16 +88,16 @@ const specs = {
   },
   ToyType: {
     delegate: 'toyType',
-    fields: ['name', 'sortOrder', 'isActive', 'createdAt']
+    fields: ['name', 'sortOrder', 'imageUrl', 'isActive', 'createdAt']
   },
   Toy: {
     delegate: 'toy',
-    fields: ['typeId', 'name', 'code', 'sortOrder', 'isActive', 'createdAt'],
+    fields: ['typeId', 'name', 'code', 'sortOrder', 'imageUrl', 'isActive', 'createdAt'],
     populate: { typeId: { relation: 'type', model: 'ToyType' } }
   },
   ToyProcess: {
     delegate: 'toyProcess',
-    fields: ['toyId', 'name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'isActive', 'createdAt'],
+    fields: ['toyId', 'name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'imageUrl', 'isActive', 'createdAt'],
     populate: { toyId: { relation: 'toy', model: 'Toy' } }
   },
   ProductionDay: {

@@ -234,9 +234,9 @@ function createProductionRouter(options = {}) {
     const activeToys = toys.filter(row => row.isActive !== false && typeIds.has(id(row.typeId))), toyIds = new Set(activeToys.map(id));
     return {
       features: { training: true, multiWork: true, manualEntryBy: true },
-      types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0 })),
-      toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0 })),
-      processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0 })),
+      types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
+      toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
+      processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
       workers: workers.filter(row => row.status === 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       archivedWorkers: workers.filter(row => row.status !== 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       // The parts the floor has typed, so the office can rename them in one
@@ -310,9 +310,9 @@ function createProductionRouter(options = {}) {
     return { ok: true };
   }, true));
   const specs = [
-    { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder'] },
-    { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId'] },
-    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId'] },
+    { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl'] },
+    { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId', 'imageUrl'] },
+    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl'] },
     { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name', 'toyId'] }
   ];
   const masterData = async (spec, body, previous = {}) => {
@@ -322,6 +322,13 @@ function createProductionRouter(options = {}) {
     if (!String(merged.name || '').trim()) fail('Name is required.');
     data.name = String(merged.name).trim().slice(0, 100);
     if (data.sortOrder !== undefined) integer(data.sortOrder, 'Sort order');
+    // Only a link, and only to somewhere the app itself put the file: a stored
+    // address is handed straight to a browser as an image source.
+    if (data.imageUrl !== undefined) {
+      const link = String(data.imageUrl).trim();
+      if (link && !/^https:\/\/[^\s]+$/i.test(link)) fail('An image link must be an https address.');
+      data.imageUrl = link.slice(0, 500);
+    }
     for (const field of ['targetPerHour', 'target8h', 'target12h']) {
       if (data[field] !== undefined && (typeof data[field] !== 'number' || !Number.isFinite(data[field]) || data[field] < 0)) fail('Target must be a nonnegative number.');
     }
@@ -362,6 +369,32 @@ function createProductionRouter(options = {}) {
       return { ok: true };
     }, true));
   }
+  /**
+   * Park a photo of a category, toy or work step on ImageKit.
+   *
+   * The file goes through the server rather than straight from the browser, so
+   * the ImageKit keys stay here and the app decides what is allowed to land
+   * there: pictures only, within a size the floor's phones can actually send.
+   * The address comes back, and saving it onto the row is a separate step —
+   * an upload that nobody saves is only a stray file, not a broken catalogue.
+   */
+  const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
+  router.post('/image', auth, admin, handle(async req => {
+    const body = req.body || {};
+    const data = String(body.data || '');
+    const kind = String(body.mimeType || '').toLowerCase();
+    if (!data) fail('Choose a picture to upload.');
+    if (!/^image\/(png|jpe?g|webp|gif)$/.test(kind)) fail('Pictures only — PNG, JPG, WEBP or GIF.');
+    const buffer = Buffer.from(data, 'base64');
+    if (!buffer.length) fail('That file could not be read.');
+    if (buffer.length > MAX_IMAGE_BYTES) fail('That picture is over 6 MB. Send a smaller one.');
+    const imagekit = require('./imagekit-client')();
+    const safe = String(body.fileName || 'photo').replace(/[^a-z0-9.\-_]/gi, '-').slice(0, 60) || 'photo';
+    const upload = await imagekit.upload({ file: buffer, fileName: safe, folder: '/production-catalogue', useUniqueFileName: true });
+    await audit(req, 'catalogue-image-uploaded', `Uploaded ${safe}`, null, { url: upload.url });
+    return { url: upload.url };
+  }, true));
+
   router.post('/catalogue/initialize', auth, admin, handle(async req => {
     const result = await initializeCatalogue(models);
     await audit(req, 'catalogue-initialized', 'Initialized editable photo catalogue (existing rows preserved)', null, result);

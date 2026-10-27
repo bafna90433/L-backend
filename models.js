@@ -255,6 +255,8 @@ const DeletedLogSchema = new mongoose.Schema({
 const ToyTypeSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true },
   sortOrder: { type: Number, default: 0 },
+  // A photo of it, parked on ImageKit. Blank until somebody uploads one.
+  imageUrl: { type: String, default: '' },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
@@ -264,6 +266,8 @@ const ToySchema = new mongoose.Schema({
   name: { type: String, required: true },
   code: { type: String, default: '' },
   sortOrder: { type: Number, default: 0 },
+  // A photo of it, parked on ImageKit. Blank until somebody uploads one.
+  imageUrl: { type: String, default: '' },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
@@ -272,6 +276,8 @@ const ToyProcessSchema = new mongoose.Schema({
   toyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Toy', required: true },
   name: { type: String, required: true },
   sortOrder: { type: Number, default: 0 },
+  // A photo of it, parked on ImageKit. Blank until somebody uploads one.
+  imageUrl: { type: String, default: '' },
   // Expected pieces an hour. 0 means no target has been set.
   targetPerHour: { type: Number, default: 0 },
   // What a whole shift should produce — the floor runs 8 and 12 hour shifts.

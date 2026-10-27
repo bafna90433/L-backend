@@ -373,6 +373,8 @@ model ToyType {
   id        String   @id @default(uuid())
   name      String   @unique
   sortOrder Int      @default(0)
+  /// A photo of it, parked on ImageKit. Blank until somebody uploads one.
+  imageUrl  String   @default("")
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 
@@ -387,6 +389,8 @@ model Toy {
   name      String
   code      String   @default("")
   sortOrder Int      @default(0)
+  /// A photo of it, parked on ImageKit. Blank until somebody uploads one.
+  imageUrl  String   @default("")
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
 
@@ -414,6 +418,8 @@ model ToyProcess {
    */
   target8h      Int      @default(0)
   target12h     Int      @default(0)
+  /// A photo of it, parked on ImageKit. Blank until somebody uploads one.
+  imageUrl      String   @default("")
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
 

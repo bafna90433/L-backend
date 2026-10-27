@@ -589,6 +589,21 @@ test('HTTP one worker is marked supervisor, and the others are hung on them', as
   assert.equal(renamed.body.supervisorId, 'w2');
 });
 
+test('HTTP a catalogue photo is a link the app itself handed out', async t => {
+  const { request, data } = await setup(t);
+  const made = await request('admin', 'POST', '/toys', { name: 'Fighter Jet', typeId: 'type', imageUrl: 'https://ik.imagekit.io/x/jet.png' });
+  assert.equal(made.status, 200);
+  assert.equal(data.Toy.find(row => row._id === made.body.id).imageUrl, 'https://ik.imagekit.io/x/jet.png');
+  const masters = await request('admin', 'GET', '/masters');
+  assert.equal(masters.body.toys.find(row => row.id === made.body.id).imageUrl, 'https://ik.imagekit.io/x/jet.png');
+
+  // Anything that is not a plain https address is refused: it is handed
+  // straight to a browser as an image source.
+  assert.equal((await request('admin', 'PUT', `/toys/${made.body.id}`, { imageUrl: 'javascript:alert(1)' })).status, 400);
+  // Pictures only, and only through this door.
+  assert.equal((await request('admin', 'POST', '/image', { data: 'aGk=', mimeType: 'text/html', fileName: 'x.html' })).status, 400);
+});
+
 test('HTTP an entry remembers who was supervising it', async t => {
   const { request, entry } = await setup(t);
   await request('admin', 'PUT', '/workers/w2', { name: 'Female Worker', gender: 'Female', isSupervisor: true });
