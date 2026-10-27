@@ -565,6 +565,22 @@ test('HTTP saved work spends the shelf, and a correction gives it back', async t
   assert.equal(data.StockMove.length, 0);
 });
 
+test('HTTP a toy written twice still spends the shelf once', async t => {
+  const { request, entry, data } = await setup(t);
+  // The same toy typed again, with its own copy of the work step: the parts
+  // were mapped under this one while the floor records work under the other.
+  data.Toy.push({ _id: 'toy-again', name: 'BIRD', typeId: 'type', isActive: true });
+  data.ToyProcess.push({ _id: 'process-again', name: 'BODY ASSEMBLE', toyId: 'toy-again', isActive: true });
+  data.StockItem.push({ _id: 'screw', name: 'Screw SC-2', code: 'SC-2', unit: 'pcs', opening: 10000, isActive: true });
+  data.StockRecipe.push({ _id: 'r1', toyId: 'toy-again', processId: 'process-again', itemId: 'screw', qty: 8, per: 1 });
+  // Mapped on both spellings, which must not take the screws off twice.
+  data.StockRecipe.push({ _id: 'r2', toyId: 'toy', processId: 'process', itemId: 'screw', qty: 8, per: 1 });
+
+  await request('supervisor', 'POST', '/entries', entry({ pieces: 100, enteredByName: 'Ramya' }));
+  assert.equal(data.StockMove.length, 1);
+  assert.equal(data.StockMove[0].qty, -800);
+});
+
 test('HTTP a group shares one batch, so the shelf falls once', async t => {
   const { request, entry, data } = await setup(t);
   data.StockItem.push({ _id: 'wing', name: 'Wing', code: 'FG6', unit: 'pcs', opening: 5000, isActive: true });

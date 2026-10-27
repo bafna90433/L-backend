@@ -248,6 +248,15 @@ const overtimeDays = (entries, workerOf = () => undefined) => {
  * the catalogue, and tying this to a production entry would mean nothing could
  * be logged once the shift it came from was closed.
  */
+/**
+ * A name with the spelling taken out of it.
+ *
+ * Catalogues are typed by hand, so the same toy arrives as "Fighter Jet",
+ * "FIGHTER-JET" and "fighterjet". Compared bare, those are one toy, which is
+ * what the floor means by them.
+ */
+const flatName = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
 const readDamage = body => {
   const toyName = String(body.toyName || '').trim().slice(0, 100);
   const partName = String(body.partName || '').trim().slice(0, 100);
@@ -257,4 +266,4 @@ const readDamage = body => {
   if (!qty) fail('Damage qty must be greater than zero.');
   return { date: dayStart(body.date), toyName, partName, qty };
 };
-module.exports = { WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, shiftMinutesFor, readEntry, readDamage, rate, sharePieces, OVERTIME_GRACE_MINUTES, overtimeMinutes, overtimeDays, performanceFlags, recordBreaks, standingRecords, dailyPieceRecords, readTrainingDates, isTrainingOn };
+module.exports = { flatName, WORK_TYPES, SHIFTS, DEFAULT_BREAKS, DEFAULT_SHIFTS, configureShifts, shiftSettings, readShiftSettings, breakMinutesWithin, fail, id, plain, shiftFor, integer, toMinutes, dayKey, dayStart, dayEnd, shiftMinutesFor, readEntry, readDamage, rate, sharePieces, OVERTIME_GRACE_MINUTES, overtimeMinutes, overtimeDays, performanceFlags, recordBreaks, standingRecords, dailyPieceRecords, readTrainingDates, isTrainingOn };

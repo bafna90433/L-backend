@@ -381,7 +381,21 @@ function createProductionRouter(options = {}) {
    */
   const spendStock = async (req, entry) => {
     if (!StockRecipe || !StockMove) return;
-    const lines = (await StockRecipe.find({})).filter(row => id(row.toyId) === id(entry.toyId) && id(row.processId) === id(entry.processId));
+    // Matched on the names rather than the ids: a catalogue typed by hand ends
+    // up holding "Fighter Jet" and "FIGHTER-JET", with the parts mapped under
+    // one and the work recorded under the other. Ids would never meet and the
+    // shelf would quietly never move. One line per item, so a toy written twice
+    // does not take its parts off twice either.
+    const [toys, steps] = await Promise.all([Toy.find({}), ToyProcess.find({})]);
+    const nameOf = (rows, wanted) => rules.flatName(rows.find(row => id(row) === id(wanted))?.name || '');
+    const toyWanted = nameOf(toys, entry.toyId), stepWanted = nameOf(steps, entry.processId);
+    const seen = new Set();
+    const lines = (await StockRecipe.find({})).filter(row => {
+      const same = toyWanted && nameOf(toys, row.toyId) === toyWanted && nameOf(steps, row.processId) === stepWanted;
+      if (!same || seen.has(id(row.itemId))) return false;
+      seen.add(id(row.itemId));
+      return true;
+    });
     for (const line of lines) {
       const per = Number(line.per) || 1, each = Number(line.qty) || 0;
       if (!each) continue;
