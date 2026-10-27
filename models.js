@@ -309,6 +309,10 @@ const ProductionEntrySchema = new mongoose.Schema({
   pieces: { type: Number, default: 0 },
   note: { type: String, default: '' },
   workType: { type: String, default: 'regular' },
+  // Who was running the floor for this work. Taken from the worker when the
+  // entry is made, but kept on the entry itself, because a worker can be lent
+  // to another supervisor for a shift and the record should say who it was.
+  supervisorId: { type: String, default: '' },
   // Group work: one entry per member, all sharing an id and the name the floor
   // calls the group by. Empty on ordinary single-worker entries.
   groupId: { type: String, default: '' },

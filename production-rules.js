@@ -95,7 +95,7 @@ const readEntry = body => {
   if (!minutes) fail('Minutes must be greater than zero.');
   const workType = body.workType === undefined || body.workType === null || body.workType === '' ? 'regular' : String(body.workType);
   if (!WORK_TYPES.includes(workType)) fail('Work type must be regular, training or cover.');
-  return { date: dayStart(body.date), labourId: id(body.labourId), toyId: id(body.toyId), processId: id(body.processId), minutes, pieces: integer(body.pieces, 'Pieces'), note: String(body.note || '').slice(0, 200), workType, groupId: String(body.groupId || '').trim().slice(0, 40), groupName: String(body.groupName || '').trim().slice(0, 60) };
+  return { date: dayStart(body.date), labourId: id(body.labourId), toyId: id(body.toyId), processId: id(body.processId), minutes, pieces: integer(body.pieces, 'Pieces'), note: String(body.note || '').slice(0, 200), workType, supervisorId: id(body.supervisorId || ''), groupId: String(body.groupId || '').trim().slice(0, 40), groupName: String(body.groupName || '').trim().slice(0, 60) };
 };
 const rate = (pieces, minutes) => minutes ? Math.round(pieces * 600 / minutes) / 10 : 0;
 const readTrainingDates = (body, previous = {}) => {

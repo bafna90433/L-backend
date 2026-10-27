@@ -472,6 +472,9 @@ model ProductionEntry {
    * regular, training or cover — how this piece of work should be read.
    */
   workType      String   @default("regular")
+  /// Who was running the floor for this work, kept on the entry itself because
+  /// a worker can be lent to another supervisor for a shift.
+  supervisorId  String   @default("")
   /**
    * Group work: every member's entry carries the same groupId and the name the
    * floor calls the group by. Empty on an ordinary single-worker entry.

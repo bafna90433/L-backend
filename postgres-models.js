@@ -106,7 +106,7 @@ const specs = {
   },
   ProductionEntry: {
     delegate: 'productionEntry',
-    fields: ['date', 'labourId', 'toyId', 'processId', 'minutes', 'pieces', 'note', 'workType', 'groupId', 'groupName', 'enteredBy', 'enteredByName', 'createdAt', 'updatedAt'],
+    fields: ['date', 'labourId', 'toyId', 'processId', 'minutes', 'pieces', 'note', 'workType', 'supervisorId', 'groupId', 'groupName', 'enteredBy', 'enteredByName', 'createdAt', 'updatedAt'],
     populate: {
       toyId: { relation: 'toy', model: 'Toy' },
       processId: { relation: 'process', model: 'ToyProcess' }

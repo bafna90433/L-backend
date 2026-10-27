@@ -589,6 +589,18 @@ test('HTTP one worker is marked supervisor, and the others are hung on them', as
   assert.equal(renamed.body.supervisorId, 'w2');
 });
 
+test('HTTP an entry remembers who was supervising it', async t => {
+  const { request, entry } = await setup(t);
+  await request('admin', 'PUT', '/workers/w2', { name: 'Female Worker', gender: 'Female', isSupervisor: true });
+
+  const made = await request('supervisor', 'POST', '/entries', entry({ pieces: 120, supervisorId: 'w2', enteredByName: 'Ramya' }));
+  assert.equal(made.status, 200);
+  const day = await request('owner', 'GET', `/day?date=${entry().date}`);
+  const row = day.body.entries.find(line => line.id === made.body.id);
+  assert.equal(row.supervisorId, 'w2');
+  assert.equal(row.supervisorName, 'Female Worker');
+});
+
 test('HTTP a toy written twice still spends the shelf once', async t => {
   const { request, entry, data } = await setup(t);
   // The same toy typed again, with its own copy of the work step: the parts
