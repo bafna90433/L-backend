@@ -565,6 +565,30 @@ test('HTTP saved work spends the shelf, and a correction gives it back', async t
   assert.equal(data.StockMove.length, 0);
 });
 
+test('HTTP one worker is marked supervisor, and the others are hung on them', async t => {
+  const { request } = await setup(t);
+
+  const boss = await request('admin', 'PUT', '/workers/w2', { name: 'Female Worker', gender: 'Female', isSupervisor: true });
+  assert.equal(boss.status, 200);
+  assert.equal(boss.body.isSupervisor, true);
+
+  const hung = await request('admin', 'PUT', '/workers/w1', { name: 'Male Worker', gender: 'Male', supervisorId: 'w2' });
+  assert.equal(hung.status, 200);
+  assert.equal(hung.body.supervisorId, 'w2');
+
+  const masters = await request('admin', 'GET', '/masters');
+  const worker = masters.body.workers.find(row => row.id === 'w1');
+  assert.equal(worker.supervisorName, 'Female Worker');
+  assert.deepEqual(masters.body.workers.filter(row => row.isSupervisor).map(row => row.id), ['w2']);
+
+  // Nobody answers for themselves.
+  assert.equal((await request('admin', 'PUT', '/workers/w1', { name: 'Male Worker', gender: 'Male', supervisorId: 'w1' })).status, 400);
+
+  // Editing something else leaves both the mark and the link where they were.
+  const renamed = await request('admin', 'PUT', '/workers/w1', { name: 'Male Worker', gender: 'Male', department: 'Packing' });
+  assert.equal(renamed.body.supervisorId, 'w2');
+});
+
 test('HTTP a toy written twice still spends the shelf once', async t => {
   const { request, entry, data } = await setup(t);
   // The same toy typed again, with its own copy of the work step: the parts

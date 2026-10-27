@@ -36,6 +36,10 @@ const LabourSchema = new mongoose.Schema({
   shiftEnd: { type: String, default: '20:30' },
   gender: { type: String, enum: ['Male', 'Female', 'Other'], default: 'Male' },
   empCode: { type: String, default: '' },
+  // A supervisor is one of the workers, marked so they can be picked as one.
+  isSupervisor: { type: Boolean, default: false },
+  // Which of them answers for this worker: another worker's id, blank until set.
+  supervisorId: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now }
 });
 

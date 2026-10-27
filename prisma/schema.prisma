@@ -81,6 +81,13 @@ model Labour {
   shiftEnd      String   @default("20:30")
   gender        String   @default("Male")
   empCode       String   @default("")
+  /// A supervisor is one of the workers, marked so they can be picked as one.
+  isSupervisor  Boolean  @default(false)
+  /**
+   * Which of them answers for this worker: another worker's id, blank until a
+   * supervisor is picked.
+   */
+  supervisorId  String   @default("")
   createdAt     DateTime @default(now())
 
   attendance       Attendance[]
@@ -184,29 +191,35 @@ model Reminder {
  * everyone who held it before. Kept apart from Task on purpose.
  */
 model Operation {
-  id             String    @id @default(uuid())
-  title          String
-  details        String    @default("")
-  urgent         Boolean   @default(false)
-  status         String    @default("open")
-  assignedTo     String    @default("")
-  assignedToName String    @default("")
-  assignments    Json      @default("[]")
-  /** What the people on this work said to each other, newest last. */
-  messages       Json      @default("[]")
-  nextFollowup   String    @default("")
-  /** What the follow-up is about, in the chaser's own words. */
-  followupNote   String    @default("")
-  createdBy      String    @default("")
-  createdByName  String    @default("")
-  /** The floor finishes the work and says so; the MD is the one who closes it. */
+  id                  String    @id @default(uuid())
+  title               String
+  details             String    @default("")
+  urgent              Boolean   @default(false)
+  status              String    @default("open")
+  assignedTo          String    @default("")
+  assignedToName      String    @default("")
+  assignments         Json      @default("[]")
+  /**
+   * What the people on this work said to each other, newest last.
+   */
+  messages            Json      @default("[]")
+  nextFollowup        String    @default("")
+  /**
+   * What the follow-up is about, in the chaser's own words.
+   */
+  followupNote        String    @default("")
+  createdBy           String    @default("")
+  createdByName       String    @default("")
+  /**
+   * The floor finishes the work and says so; the MD is the one who closes it.
+   */
   doneRequestedBy     String    @default("")
   doneRequestedByName String    @default("")
   doneRequestedAt     DateTime?
-  doneBy         String    @default("")
-  doneByName     String    @default("")
-  doneAt         DateTime?
-  createdAt      DateTime  @default(now())
+  doneBy              String    @default("")
+  doneByName          String    @default("")
+  doneAt              DateTime?
+  createdAt           DateTime  @default(now())
 
   @@index([status])
   @@index([urgent])

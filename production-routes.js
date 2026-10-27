@@ -94,7 +94,7 @@ function createProductionRouter(options = {}) {
     return { worker, toy, process };
   };
   const sort = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name);
-  const workerView = worker => ({ id: id(worker), name: worker.name, gender: worker.gender || 'Male', department: worker.department || '', unit: worker.unit || '', empCode: worker.empCode || '', status: worker.status, shift: shiftFor(worker).label, shiftStart: shiftFor(worker).start, shiftEnd: shiftFor(worker).end, shiftMinutes: shiftMinutesFor(worker) });
+  const workerView = worker => ({ id: id(worker), name: worker.name, gender: worker.gender || 'Male', department: worker.department || '', unit: worker.unit || '', empCode: worker.empCode || '', isSupervisor: worker.isSupervisor === true, supervisorId: id(worker.supervisorId || ''), status: worker.status, shift: shiftFor(worker).label, shiftStart: shiftFor(worker).start, shiftEnd: shiftFor(worker).end, shiftMinutes: shiftMinutesFor(worker) });
   const shiftHours = () => ({ Male: shiftMinutesFor({ gender: 'Male' }) / 60, Female: shiftMinutesFor({ gender: 'Female' }) / 60 });
   const shiftLengths = () => Object.fromEntries(['Male', 'Female'].map(gender => {
     const minutes = shiftMinutesFor({ gender });
@@ -221,7 +221,15 @@ function createProductionRouter(options = {}) {
   router.get('/masters', auth, read, handle(async () => {
     const [types, toys, processes, workers, damageParts] = await Promise.all([ToyType.find({}), Toy.find({}), ToyProcess.find({}), Labour.find({}), DamagePart.find({})]);
     const schedules = await trainingSchedules();
-    const trainingWorkerView = worker => ({ ...workerView(worker), ...rules.readTrainingDates({}, schedules.get(id(worker))), isTraining: rules.isTrainingOn(schedules.get(id(worker)), dayKey()) });
+    // The name travels with the worker so a list can say who answers for them
+    // without having to look the supervisor up again on every screen.
+    const supervisorName = new Map(workers.map(row => [id(row), row.name]));
+    const trainingWorkerView = worker => ({
+      ...workerView(worker),
+      supervisorName: supervisorName.get(id(worker.supervisorId || '')) || '',
+      ...rules.readTrainingDates({}, schedules.get(id(worker))),
+      isTraining: rules.isTrainingOn(schedules.get(id(worker)), dayKey())
+    });
     const typeIds = new Set(types.filter(row => row.isActive !== false).map(id));
     const activeToys = toys.filter(row => row.isActive !== false && typeIds.has(id(row.typeId))), toyIds = new Set(activeToys.map(id));
     return {
@@ -244,7 +252,12 @@ function createProductionRouter(options = {}) {
     const name = String(body.name ?? previous?.name ?? '').trim(), gender = body.gender ?? previous?.gender ?? 'Male';
     if (!name) fail('Worker name is required.');
     if (!['Male', 'Female', 'Other'].includes(gender)) fail('Choose a valid gender.');
-    return { name: name.slice(0, 100), gender, empCode: String(body.empCode ?? previous?.empCode ?? '').trim().slice(0, 50), department: String(body.department ?? previous?.department ?? '').trim().slice(0, 100), unit: String(body.unit ?? previous?.unit ?? '').trim().slice(0, 40) };
+    // A supervisor is one of the workers, marked as one; nobody answers for
+    // themselves, which is the one way this could point in a circle.
+    const isSupervisor = body.isSupervisor === undefined ? previous?.isSupervisor === true : body.isSupervisor === true;
+    const supervisorId = id(body.supervisorId ?? previous?.supervisorId ?? '');
+    if (supervisorId && supervisorId === id(previous || '')) fail('A worker cannot be their own supervisor.');
+    return { name: name.slice(0, 100), gender, empCode: String(body.empCode ?? previous?.empCode ?? '').trim().slice(0, 50), department: String(body.department ?? previous?.department ?? '').trim().slice(0, 100), unit: String(body.unit ?? previous?.unit ?? '').trim().slice(0, 40), isSupervisor, supervisorId };
   };
   /**
    * The next free employee code, as 001, 002, and so on.

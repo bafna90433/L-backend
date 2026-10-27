@@ -22,7 +22,7 @@ const specs = {
   },
   Labour: {
     delegate: 'labour',
-    fields: ['name', 'whatsapp', 'monthlySalary', 'imageUrl', 'status', 'employeeType', 'department', 'unit', 'phonePeNumber', 'upiId', 'phonePeQrUrl', 'faceEmbedding', 'workingHours', 'shiftStart', 'shiftEnd', 'gender', 'empCode', 'createdAt']
+    fields: ['name', 'whatsapp', 'monthlySalary', 'imageUrl', 'status', 'employeeType', 'department', 'unit', 'phonePeNumber', 'upiId', 'phonePeQrUrl', 'faceEmbedding', 'workingHours', 'shiftStart', 'shiftEnd', 'gender', 'empCode', 'isSupervisor', 'supervisorId', 'createdAt']
   },
   Attendance: {
     delegate: 'attendance',
