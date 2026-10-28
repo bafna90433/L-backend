@@ -620,6 +620,10 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   data.ToyProcess[0].sortOrder = 1;
   data.Toy.push({ _id: 'pack', name: 'Window packing', typeId: 'type', isActive: true });
   data.ToyProcess.push({ _id: 'pack-bird', name: 'BIRD', toyId: 'pack', sortOrder: 1, isActive: true });
+  // Checking closes the line even though it was added first, because that is
+  // where the floor calls a toy finished.
+  data.Toy.push({ _id: 'check', name: 'Bopp checking', typeId: 'type', isActive: true });
+  data.ToyProcess.push({ _id: 'check-bird', name: 'Bird', toyId: 'check', sortOrder: 0, isActive: true });
   // One body a piece, and 500 bodies on the shelf.
   data.StockItem.push({ _id: 'body', name: 'Body', code: 'B1', kind: 'part', unit: 'pcs', opening: 500, isActive: true });
   data.StockRecipe.push({ _id: 'r1', toyId: 'toy', processId: 'process', itemId: 'body', qty: 1, per: 1 });
@@ -627,6 +631,7 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   await request('supervisor', 'POST', '/entries', entry({ pieces: 400, enteredByName: 'Ramya' }));
   await request('supervisor', 'POST', '/entries', entry({ processId: 'gum', pieces: 300, enteredByName: 'Ramya' }));
   await request('supervisor', 'POST', '/entries', entry({ toyId: 'pack', processId: 'pack-bird', pieces: 250, enteredByName: 'Ramya' }));
+  await request('supervisor', 'POST', '/entries', entry({ toyId: 'check', processId: 'check-bird', pieces: 220, enteredByName: 'Ramya' }));
 
   const seen = await request('owner', 'GET', '/tracking');
   assert.equal(seen.status, 200);
@@ -637,12 +642,13 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   const bird = seen.body.toys.find(row => row.id === 'toy');
   assert.equal(bird.intake, 500);
   assert.equal(bird.intakeFrom, 'Body (B1)');
-  assert.deepEqual(bird.steps.map(step => [step.name, step.pieces]), [['Body assembly', 400], ['Wings gumming', 300], ['BIRD', 250]]);
-  assert.equal(bird.ready, 250);
+  assert.deepEqual(bird.steps.map(step => [step.name, step.pieces]), [['Body assembly', 400], ['Wings gumming', 300], ['BIRD', 250], ['Bird', 220]]);
+  assert.equal(bird.ready, 220);
   assert.equal(bird.notStarted, 100);
   assert.deepEqual(bird.waiting, [
     { after: 'Body assembly', before: 'Wings gumming', pieces: 100 },
-    { after: 'Wings gumming', before: 'BIRD', pieces: 50 }
+    { after: 'Wings gumming', before: 'BIRD', pieces: 50 },
+    { after: 'BIRD', before: 'Bird', pieces: 30 }
   ]);
 });
 

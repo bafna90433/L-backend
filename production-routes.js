@@ -694,10 +694,13 @@ function createProductionRouter(options = {}) {
       // Packing is written the other way round — the toy is the packing bench
       // and the step names the model — so those steps belong to this line too,
       // and they come after the making.
-      const packing = steps
+      const benches = steps
         .filter(step => step.isActive !== false && id(step.toyId) !== id(toy) && flat(step.name) === flat(toy.name))
         .sort(order);
-      const line = [...own, ...packing].map(step => ({
+      // Checking is where a toy is called finished, so those benches close the
+      // line whatever order they were added in. Everything else keeps its own.
+      const checks = bench => /check/i.test(live.find(row => id(row) === id(bench.toyId))?.name || '') || /check/i.test(bench.name);
+      const line = [...own, ...benches.filter(step => !checks(step)), ...benches.filter(checks)].map(step => ({
         id: id(step),
         name: step.name,
         under: id(step.toyId) === id(toy) ? '' : (live.find(row => id(row) === id(step.toyId))?.name || ''),
