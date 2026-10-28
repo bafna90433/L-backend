@@ -234,7 +234,7 @@ function createProductionRouter(options = {}) {
     const activeToys = toys.filter(row => row.isActive !== false && typeIds.has(id(row.typeId))), toyIds = new Set(activeToys.map(id));
     return {
       features: { training: true, multiWork: true, manualEntryBy: true },
-      types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
+      types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', stepsOnly: row.stepsOnly === true })),
       toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
       processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
       workers: workers.filter(row => row.status === 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
@@ -323,7 +323,7 @@ function createProductionRouter(options = {}) {
     };
   }, true));
   const specs = [
-    { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl'] },
+    { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl', 'stepsOnly'] },
     { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId', 'imageUrl'] },
     { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl'] },
     { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name', 'toyId'] }
@@ -365,6 +365,7 @@ function createProductionRouter(options = {}) {
     if (!String(merged.name || '').trim()) fail('Name is required.');
     data.name = String(merged.name).trim().slice(0, 100);
     if (data.sortOrder !== undefined) integer(data.sortOrder, 'Sort order');
+    if (data.stepsOnly !== undefined) data.stepsOnly = data.stepsOnly === true;
     // Only a link, and only to somewhere the app itself put the file: a stored
     // address is handed straight to a browser as an image source.
     if (data.imageUrl !== undefined) {

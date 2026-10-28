@@ -255,6 +255,10 @@ const DeletedLogSchema = new mongoose.Schema({
 const ToyTypeSchema = new mongoose.Schema({
   name: { type: String, required: true, unique: true },
   sortOrder: { type: Number, default: 0 },
+  // Some categories are a job rather than a shelf of models — cleaning is done
+  // to everything and belongs to no toy. Those hold their work steps directly,
+  // under one toy of the same name that the panel keeps out of the way.
+  stepsOnly: { type: Boolean, default: false },
   // A photo of it, parked on ImageKit. Blank until somebody uploads one.
   imageUrl: { type: String, default: '' },
   isActive: { type: Boolean, default: true },

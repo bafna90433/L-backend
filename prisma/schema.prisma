@@ -373,6 +373,9 @@ model ToyType {
   id        String   @id @default(uuid())
   name      String   @unique
   sortOrder Int      @default(0)
+  /// A category that is a job rather than a shelf of models, such as cleaning:
+  /// it holds its work steps directly, under one toy of the same name.
+  stepsOnly Boolean  @default(false)
   /// A photo of it, parked on ImageKit. Blank until somebody uploads one.
   imageUrl  String   @default("")
   isActive  Boolean  @default(true)
