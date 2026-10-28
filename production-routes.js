@@ -724,9 +724,15 @@ function createProductionRouter(options = {}) {
         if (intake === null || sets < intake) { intake = sets; intakeFrom = `${item.name}${item.code ? ` (${item.code})` : ''}`; }
       }
 
-      const broken = damage
-        .filter(row => flat(row.toyName) === flat(toy.name))
-        .reduce((sum, row) => sum + Number(row.qty || 0), 0);
+      // What broke, part by part. "Damage 700" tells the owner there is a
+      // problem; "620 of them are the top" tells them where it is.
+      const mine = damage.filter(row => flat(row.toyName) === flat(toy.name));
+      const broken = mine.reduce((sum, row) => sum + Number(row.qty || 0), 0);
+      const brokenParts = [...mine.reduce((rows, row) => {
+        const name = String(row.partName || 'Not named').trim() || 'Not named';
+        rows.set(flat(name), { name, qty: (rows.get(flat(name))?.qty || 0) + Number(row.qty || 0) });
+        return rows;
+      }, new Map()).values()].sort((a, b) => b.qty - a.qty);
       // How many pieces have got past every step up to this one. A step cannot
       // have finished more than the step before it fed to it, whatever the two
       // counts say on their own — so it is the running smallest that follows a
@@ -745,7 +751,7 @@ function createProductionRouter(options = {}) {
       return {
         id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '', isModel: !isBench(toy),
         typeName: typeName.get(id(toy.typeId)) || '',
-        intake, intakeFrom, ready, damage: broken, notStarted, waiting, steps: line
+        intake, intakeFrom, ready, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line
       };
     }).filter(card => card.steps.length > 0 || card.intake !== null);
   };
