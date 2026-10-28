@@ -9,7 +9,7 @@ const SECRET = process.env.JWT_SECRET || 'labour_management_super_secret_key_123
 
 function createProductionRouter(options = {}) {
   const models = options.models || productionModels(require('./models'));
-  const { StockRecipe, StockMove } = models;
+  const { StockItem, StockRecipe, StockMove } = models;
   const resolveAccess = options.resolveAccess || require('./access-control').resolveUserAccess;
   const atomic = options.transaction || transaction;
   const { User, Labour, ToyType, Toy, ToyProcess, ProductionEntry, ProductionLog, DamageEntry, DamagePart, SystemSettings } = models;
@@ -579,6 +579,92 @@ function createProductionRouter(options = {}) {
       records, recordBoard, dailyRecordBoard, dailyRecordsBroken, flags, todayFlags: flags.filter(row => row.date === dayKey(to)).length, processCount: byProcess.size
     };
   };
+  /**
+   * Where a toy's work has got to, model by model.
+   *
+   * The floor's question is never "how many pieces this week" but "parts came
+   * in for fifty thousand, forty thousand are packed, where are the other ten
+   * thousand" — so this follows one model down its own line of work steps and
+   * says what is sitting between each pair of them.
+   *
+   * Everything here counts from the beginning rather than over a period: parts
+   * that came in last month are still parts, and a piece half-finished in
+   * September is still half-finished today.
+   */
+  const trackToys = async () => {
+    const [toys, types, steps, entries, damage, items, recipe, moves] = await Promise.all([
+      Toy.find({}), ToyType.find({}), ToyProcess.find({}), ProductionEntry.find({}), DamageEntry.find({}),
+      StockItem ? StockItem.find({}) : [], StockRecipe ? StockRecipe.find({}) : [], StockMove ? StockMove.find({}) : []
+    ]);
+    const typeName = new Map(types.map(row => [id(row), row.name]));
+    const flat = rules.flatName;
+    const live = toys.filter(toy => toy.isActive !== false);
+    const madeOn = new Map();
+    for (const row of entries) {
+      const key = `${id(row.toyId)}|${id(row.processId)}`;
+      madeOn.set(key, (madeOn.get(key) || 0) + Number(row.pieces || 0));
+    }
+    const order = (a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || String(a.name).localeCompare(String(b.name));
+    const itemById = new Map(items.map(item => [id(item), item]));
+    // What came in, item by item: the opening count plus everything added
+    // since. What has been spent does not belong here — the question is how
+    // many pieces the parts that arrived could ever make.
+    const arrived = new Map(items.map(item => [id(item), Number(item.opening || 0)]));
+    for (const move of moves) {
+      if (String(move.reason) !== 'inward') continue;
+      arrived.set(id(move.itemId), (arrived.get(id(move.itemId)) || 0) + Number(move.qty || 0));
+    }
+
+    return live.map(toy => {
+      const own = steps.filter(step => step.isActive !== false && id(step.toyId) === id(toy)).sort(order);
+      // Packing is written the other way round — the toy is the packing bench
+      // and the step names the model — so those steps belong to this line too,
+      // and they come after the making.
+      const packing = steps
+        .filter(step => step.isActive !== false && id(step.toyId) !== id(toy) && flat(step.name) === flat(toy.name))
+        .sort(order);
+      const line = [...own, ...packing].map(step => ({
+        id: id(step),
+        name: step.name,
+        under: id(step.toyId) === id(toy) ? '' : (live.find(row => id(row) === id(step.toyId))?.name || ''),
+        imageUrl: step.imageUrl || '',
+        pieces: madeOn.get(`${id(step.toyId)}|${id(step)}`) || 0
+      }));
+
+      // How many pieces the parts on hand could make: the part that runs out
+      // first decides it. Packing material is left out — a shortage of boxes
+      // says nothing about how many toys were made.
+      const lines = recipe.filter(row => id(row.toyId) === id(toy) && itemById.has(id(row.itemId)));
+      let intake = null, intakeFrom = '';
+      for (const row of lines) {
+        const item = itemById.get(id(row.itemId));
+        if (!item || item.isActive === false || item.kind === 'packing') continue;
+        const each = (Number(row.qty) || 0) / (Number(row.per) || 1);
+        if (!each) continue;
+        const sets = Math.floor((arrived.get(id(item)) || 0) / each);
+        if (intake === null || sets < intake) { intake = sets; intakeFrom = `${item.name}${item.code ? ` (${item.code})` : ''}`; }
+      }
+
+      const broken = damage
+        .filter(row => flat(row.toyName) === flat(toy.name))
+        .reduce((sum, row) => sum + Number(row.qty || 0), 0);
+      const ready = line.length ? line[line.length - 1].pieces : 0;
+      const waiting = line.slice(1).map((step, index) => ({
+        after: line[index].name,
+        before: step.name,
+        pieces: Math.max(0, line[index].pieces - step.pieces)
+      })).filter(row => row.pieces > 0);
+      const notStarted = intake !== null && line.length ? Math.max(0, intake - line[0].pieces) : null;
+
+      return {
+        id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '',
+        typeName: typeName.get(id(toy.typeId)) || '',
+        intake, intakeFrom, ready, damage: broken, notStarted, waiting, steps: line
+      };
+    }).filter(card => card.steps.length > 0 || card.intake !== null);
+  };
+  router.get('/tracking', auth, report, handle(async () => ({ toys: await trackToys() })));
+
   router.get('/report', auth, report, handle(req => buildReport(req.query)));
 /**
    * The production assistant: a question in plain words, answered from this
