@@ -705,7 +705,17 @@ function createProductionRouter(options = {}) {
    * that came in last month are still parts, and a piece half-finished in
    * September is still half-finished today.
    */
-  const trackToys = async () => {
+  const trackToys = async ({ from = '', to = '' } = {}) => {
+    // A window, when the owner asks for one: yesterday's work, last month's,
+    // or a stretch they typed. Without it everything counts from the
+    // beginning, which is the question "where is my fifty thousand".
+    const since = from ? dayStart(from) : null;
+    const until = to ? dayEnd(to) : null;
+    const within = when => {
+      if (!since && !until) return true;
+      const at = new Date(when || 0).getTime();
+      return (!since || at >= since.getTime()) && (!until || at <= until.getTime());
+    };
     const [toys, types, steps, entries, damage, items, recipe, moves] = await Promise.all([
       Toy.find({}), ToyType.find({}), ToyProcess.find({}), ProductionEntry.find({}), DamageEntry.find({}),
       StockItem ? StockItem.find({}) : [], StockRecipe ? StockRecipe.find({}) : [], StockMove ? StockMove.find({}) : []
@@ -733,7 +743,7 @@ function createProductionRouter(options = {}) {
       return JOB_WORDS.test(String(toy.name)) || JOB_WORDS.test(typeName.get(id(toy.typeId)) || '');
     };
     const madeOn = new Map();
-    for (const row of entries) {
+    for (const row of entries.filter(row => within(row.date))) {
       const key = `${id(row.toyId)}|${id(row.processId)}`;
       madeOn.set(key, (madeOn.get(key) || 0) + Number(row.pieces || 0));
     }
@@ -742,9 +752,11 @@ function createProductionRouter(options = {}) {
     // What came in, item by item: the opening count plus everything added
     // since. What has been spent does not belong here — the question is how
     // many pieces the parts that arrived could ever make.
-    const arrived = new Map(items.map(item => [id(item), Number(item.opening || 0)]));
+    // The opening count is where the shelf started, so it belongs to "from the
+    // beginning" and to nothing narrower.
+    const arrived = new Map(items.map(item => [id(item), since || until ? 0 : Number(item.opening || 0)]));
     for (const move of moves) {
-      if (String(move.reason) !== 'inward') continue;
+      if (String(move.reason) !== 'inward' || !within(move.date)) continue;
       arrived.set(id(move.itemId), (arrived.get(id(move.itemId)) || 0) + Number(move.qty || 0));
     }
 
@@ -789,7 +801,7 @@ function createProductionRouter(options = {}) {
 
       // What broke, part by part. "Damage 700" tells the owner there is a
       // problem; "620 of them are the top" tells them where it is.
-      const mine = damage.filter(row => flat(row.toyName) === flat(toy.name));
+      const mine = damage.filter(row => flat(row.toyName) === flat(toy.name) && within(row.date));
       const broken = mine.reduce((sum, row) => sum + Number(row.qty || 0), 0);
       const brokenParts = [...mine.reduce((rows, row) => {
         const name = String(row.partName || 'Not named').trim() || 'Not named';
@@ -824,7 +836,10 @@ function createProductionRouter(options = {}) {
       };
     }).filter(card => card.steps.length > 0 || card.intake !== null);
   };
-  router.get('/tracking', auth, report, handle(async () => ({ toys: await trackToys() })));
+  router.get('/tracking', auth, report, handle(async req => {
+    const from = String(req.query.from || ''), to = String(req.query.to || '');
+    return { from, to, toys: await trackToys({ from, to }) };
+  }));
 
   router.get('/report', auth, report, handle(req => buildReport(req.query)));
 /**

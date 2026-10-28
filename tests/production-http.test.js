@@ -664,6 +664,13 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
     { after: 'BIRD', before: 'Bird', pieces: 30 },
     { after: 'Bird', before: 'Pair pack', pieces: 100 }
   ]);
+
+  // Asked for a day with nothing in it, the same line reads empty — and the
+  // shelf's opening count belongs to "from the beginning", not to a window.
+  const quiet = await request('owner', 'GET', '/tracking?from=2026-01-01&to=2026-01-01');
+  const thatDay = quiet.body.toys.find(row => row.id === 'toy');
+  assert.equal(thatDay.steps.every(step => step.pieces === 0), true);
+  assert.equal(thatDay.intake, 0);
 });
 
 test('HTTP a catalogue photo is a link the app itself handed out', async t => {
