@@ -451,7 +451,13 @@ function createProductionRouter(options = {}) {
     }
     if (spec.path === 'processes') {
       const toy = await activeParent(Toy, merged.toyId, 'Toy'); await activeParent(ToyType, id(toy.typeId), 'Category'); data.toyId = id(merged.toyId);
-      if (previous.toyId && id(previous.toyId) !== data.toyId && (await ProductionEntry.find({ processId: id(previous) })).length) fail('A used process cannot be moved to another toy.');
+      // A step with work saved against it stays where it is: those entries name
+      // this toy and this step together, and moving one of the two would make
+      // them read as work on a toy it was never recorded against.
+      if (previous.toyId && id(previous.toyId) !== data.toyId) {
+        const used = (await ProductionEntry.find({})).filter(row => id(row.processId) === id(previous)).length;
+        if (used) fail(`${previous.name} has ${used} saved ${used === 1 ? 'entry' : 'entries'} against it, so it cannot be moved to another toy. Add it under the right toy and delete this one if it was filed wrongly.`);
+      }
     }
     return data;
   };
