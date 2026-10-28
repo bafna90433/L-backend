@@ -814,7 +814,13 @@ function createProductionRouter(options = {}) {
       return {
         id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '', isModel: !isBench(toy),
         typeName: typeName.get(id(toy.typeId)) || '',
-        intake, intakeFrom, ready, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line
+        intake, intakeFrom, ready, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line,
+        // Models that share a packet are read together, so they carry the
+        // same key and the page can keep their cards side by side.
+        pairKey: (() => {
+          const shared = steps.find(step => (step.packs || []).length > 1 && (step.packs || []).some(pack => id(pack.toyId) === id(toy)));
+          return shared ? shared.packs.map(pack => id(pack.toyId)).sort().join('+') : '';
+        })()
       };
     }).filter(card => card.steps.length > 0 || card.intake !== null);
   };
