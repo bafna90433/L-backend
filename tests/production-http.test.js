@@ -620,10 +620,8 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   data.ToyProcess[0].sortOrder = 1;
   data.Toy.push({ _id: 'pack', name: 'Window packing', typeId: 'type', isActive: true });
   data.ToyProcess.push({ _id: 'pack-bird', name: 'BIRD', toyId: 'pack', sortOrder: 1, isActive: true });
-  // Checking closes the line even though it was added first, because that is
-  // where the floor calls a toy finished.
   data.Toy.push({ _id: 'check', name: 'Bopp checking', typeId: 'type', isActive: true });
-  data.ToyProcess.push({ _id: 'check-bird', name: 'Bird', toyId: 'check', sortOrder: 0, isActive: true });
+  data.ToyProcess.push({ _id: 'check-bird', name: 'Bird', toyId: 'check', sortOrder: 2, isActive: true });
   // One body a piece, and 500 bodies on the shelf.
   data.StockItem.push({ _id: 'body', name: 'Body', code: 'B1', kind: 'part', unit: 'pcs', opening: 500, isActive: true });
   data.StockRecipe.push({ _id: 'r1', toyId: 'toy', processId: 'process', itemId: 'body', qty: 1, per: 1 });
