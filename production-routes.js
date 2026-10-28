@@ -702,6 +702,10 @@ function createProductionRouter(options = {}) {
         id: id(step),
         name: step.name,
         under: id(step.toyId) === id(toy) ? '' : (live.find(row => id(row) === id(step.toyId))?.name || ''),
+        // The bench's own category as well — a step called "Dinosaur" sitting
+        // under a toy called "Jumping toys" says nothing about it being box
+        // assembly, which is the name the floor knows the job by.
+        underType: id(step.toyId) === id(toy) ? '' : (typeName.get(id(live.find(row => id(row) === id(step.toyId))?.typeId)) || ''),
         imageUrl: step.imageUrl || '',
         pieces: madeOn.get(`${id(step.toyId)}|${id(step)}`) || 0
       }));
