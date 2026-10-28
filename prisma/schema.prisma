@@ -429,6 +429,11 @@ model ToyProcess {
    * packets are 500 of each. Empty on an ordinary step.
    */
   packs         Json     @default("[]")
+  /**
+   * The step the floor calls the end of this toy's line. Some models finish at
+   * checking, some two steps earlier. Nothing marked means the last in order.
+   */
+  isFinal       Boolean  @default(false)
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
 

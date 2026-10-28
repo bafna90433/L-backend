@@ -665,6 +665,15 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
     { after: 'Bird', before: 'Pair pack', pieces: 100 }
   ]);
 
+  // Marked as the end of the line, gumming closes it: the packing and checking
+  // benches after it are somebody else's business.
+  await request('admin', 'PUT', '/processes/gum', { isFinal: true });
+  const short = await request('owner', 'GET', '/tracking');
+  const ends = short.body.toys.find(row => row.id === 'toy');
+  assert.deepEqual(ends.steps.map(step => step.name), ['Body assembly', 'Wings gumming']);
+  assert.equal(ends.ready, 300);
+
+  await request('admin', 'PUT', '/processes/gum', { isFinal: false });
   // Asked for a day with nothing in it, the same line reads empty — and the
   // shelf's opening count belongs to "from the beginning", not to a window.
   const quiet = await request('owner', 'GET', '/tracking?from=2026-01-01&to=2026-01-01');

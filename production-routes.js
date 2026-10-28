@@ -236,7 +236,7 @@ function createProductionRouter(options = {}) {
       features: { training: true, multiWork: true, manualEntryBy: true },
       types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', stepsOnly: row.stepsOnly === true })),
       toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
-      processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', packs: (row.packs || []).map(pack => ({ toyId: id(pack.toyId), qty: Number(pack.qty) || 1 })) })),
+      processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', isFinal: row.isFinal === true, packs: (row.packs || []).map(pack => ({ toyId: id(pack.toyId), qty: Number(pack.qty) || 1 })) })),
       workers: workers.filter(row => row.status === 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       archivedWorkers: workers.filter(row => row.status !== 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       // The parts the floor has typed, so the office can rename them in one
@@ -322,7 +322,7 @@ function createProductionRouter(options = {}) {
   const specs = [
     { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl', 'stepsOnly'] },
     { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId', 'imageUrl'] },
-    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl', 'packs'] },
+    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl', 'packs', 'isFinal'] },
     { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name', 'toyId'] }
   ];
   /**
@@ -410,6 +410,7 @@ function createProductionRouter(options = {}) {
     data.name = String(merged.name).trim().slice(0, 100);
     if (data.sortOrder !== undefined) integer(data.sortOrder, 'Sort order');
     if (data.stepsOnly !== undefined) data.stepsOnly = data.stepsOnly === true;
+    if (data.isFinal !== undefined) data.isFinal = data.isFinal === true;
     // Only a link, and only to somewhere the app itself put the file: a stored
     // address is handed straight to a browser as an image source.
     if (data.imageUrl !== undefined) {
@@ -779,7 +780,12 @@ function createProductionRouter(options = {}) {
       const packing = steps
         .filter(step => step.isActive !== false && id(step.toyId) !== id(toy) && (flat(step.name) === flat(toy.name) || packed(step)))
         .sort(order);
-      const line = [...own, ...packing].map(step => ({
+      const ordered = [...own, ...packing];
+      // The floor decides where a toy is finished: some models end at checking,
+      // some two steps earlier. Whatever is marked closes the line, and what
+      // comes after it is somebody else's business.
+      const ends = ordered.findIndex(step => step.isFinal === true);
+      const line = (ends >= 0 ? ordered.slice(0, ends + 1) : ordered).map(step => ({
         id: id(step),
         name: step.name,
         under: id(step.toyId) === id(toy) ? '' : (live.find(row => id(row) === id(step.toyId))?.name || ''),
@@ -832,7 +838,7 @@ function createProductionRouter(options = {}) {
       return {
         id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '', isModel: !isBench(toy),
         typeName: typeName.get(id(toy.typeId)) || '',
-        intake, intakeFrom, ready, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line,
+        intake, intakeFrom, ready, markedEnd: ends >= 0, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line,
         // Models that share a packet are read together, so they carry the
         // same key and the page can keep their cards side by side.
         pairKey: (() => {

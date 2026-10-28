@@ -280,6 +280,10 @@ const ToyProcessSchema = new mongoose.Schema({
   toyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Toy', required: true },
   name: { type: String, required: true },
   sortOrder: { type: Number, default: 0 },
+  // The step the floor calls the end of this toy's line. Some models finish at
+  // checking, some two steps earlier; tracking reads "ready" from whichever is
+  // marked. Nothing marked means the last step in the order.
+  isFinal: { type: Boolean, default: false },
   // What one recorded piece of this step holds. Packing is where this matters:
   // a single packet can carry a helicopter and a plane, so 500 packets are 500
   // of each — not a thousand of anything. Empty on an ordinary step.
