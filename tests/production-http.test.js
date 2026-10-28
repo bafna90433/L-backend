@@ -589,6 +589,29 @@ test('HTTP one worker is marked supervisor, and the others are hung on them', as
   assert.equal(renamed.body.supervisorId, 'w2');
 });
 
+test('HTTP deleting removes what nothing was recorded against, and archives the rest', async t => {
+  const { request, entry, data } = await setup(t);
+
+  // A toy nobody ever worked on goes for good.
+  const spare = await request('admin', 'POST', '/toys', { name: 'Spare model', typeId: 'type' });
+  const gone = await request('admin', 'DELETE', `/toys/${spare.body.id}`);
+  assert.equal(gone.body.removed, true);
+  assert.equal(data.Toy.some(row => row._id === spare.body.id), false);
+
+  // One with work saved against it is archived instead, and says why.
+  await request('supervisor', 'POST', '/entries', entry({ pieces: 50, enteredByName: 'Ramya' }));
+  const kept = await request('admin', 'DELETE', '/toys/toy');
+  assert.equal(kept.body.removed, false);
+  assert.match(kept.body.message, /archived, not deleted/);
+  assert.match(kept.body.message, /1 saved entry/);
+  assert.equal(data.Toy.find(row => row._id === 'toy').isActive, false);
+
+  // The same for people: a worker with a shift behind them is kept.
+  assert.equal((await request('admin', 'DELETE', '/workers/w1')).body.removed, false);
+  assert.equal((await request('admin', 'DELETE', '/workers/w2')).body.removed, true);
+  assert.equal(data.Labour.some(row => row._id === 'w2'), false);
+});
+
 test('HTTP tracking follows a toy down its line and says what is stuck', async t => {
   const { request, entry, data } = await setup(t);
   // Bird is made in two steps and packed on a bench of its own, which is

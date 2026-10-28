@@ -305,9 +305,22 @@ function createProductionRouter(options = {}) {
     return result;
   }, true));
   router.delete('/workers/:id', auth, admin, handle(async req => {
-    const before = await get(Labour, req.params.id, 'Worker'), after = await Labour.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
-    await audit(req, 'worker-archived', `Archived worker "${before.name}"`, workerView(before), workerView(after));
-    return { ok: true };
+    const before = await get(Labour, req.params.id, 'Worker');
+    const entries = (await ProductionEntry.find({})).filter(entry => id(entry.labourId) === id(before)).length;
+    const under = (await Labour.find({})).filter(row => id(row.supervisorId) === id(before) && row.status === 'active').length;
+    // Somebody who never recorded a shift leaves nothing behind to explain.
+    if (!entries && !under) {
+      await Labour.deleteOne({ _id: id(before) });
+      await audit(req, 'worker-deleted', `Deleted worker "${before.name}" — no production was recorded for them`, workerView(before), null);
+      return { ok: true, removed: true, uses: 0, message: `${before.name} deleted.` };
+    }
+    const why = [entries && `${entries} saved entr${entries === 1 ? 'y' : 'ies'}`, under && `${under} worker${under === 1 ? '' : 's'} under them`].filter(Boolean).join(' and ');
+    const after = await Labour.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
+    await audit(req, 'worker-archived', `Archived worker "${before.name}" — ${why}`, workerView(before), workerView(after));
+    return {
+      ok: true, removed: false, uses: entries + under,
+      message: `${before.name} archived, not deleted — ${why}. Their past production stays in the reports.`
+    };
   }, true));
   const specs = [
     { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl'] },
@@ -315,6 +328,36 @@ function createProductionRouter(options = {}) {
     { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl'] },
     { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name', 'toyId'] }
   ];
+  /**
+   * What is still hanging off a row, and why it cannot simply go.
+   *
+   * Deleting means deleting here — but a work step named on four hundred
+   * saved entries cannot be removed without those entries losing the name of
+   * what was made. So the count decides: nothing recorded, nothing to keep.
+   */
+  const dependents = async (spec, row) => {
+    const reasons = [];
+    const add = (count, what) => { if (count) reasons.push(`${count} ${what}${count === 1 ? '' : 's'}`); };
+    if (spec.path === 'toy-types') {
+      add((await Toy.find({})).filter(toy => id(toy.typeId) === id(row)).length, 'toy');
+    }
+    if (spec.path === 'toys') {
+      add((await ProductionEntry.find({})).filter(entry => id(entry.toyId) === id(row)).length, 'saved entry');
+      add((await ToyProcess.find({})).filter(step => id(step.toyId) === id(row)).length, 'work step');
+      if (StockItem) add((await StockItem.find({})).filter(item => id(item.toyId) === id(row)).length, 'stock item');
+      if (StockRecipe) add((await StockRecipe.find({})).filter(line => id(line.toyId) === id(row)).length, 'mapped part');
+    }
+    if (spec.path === 'processes') {
+      add((await ProductionEntry.find({})).filter(entry => id(entry.processId) === id(row)).length, 'saved entry');
+      if (StockRecipe) add((await StockRecipe.find({})).filter(line => id(line.processId) === id(row)).length, 'mapped part');
+    }
+    if (spec.path === 'damage-parts') {
+      add((await DamageEntry.find({})).filter(entry => id(entry.partId) === id(row)).length, 'damage record');
+    }
+    const total = reasons.reduce((sum, text) => sum + Number(text.split(' ')[0]), 0);
+    return { total, why: reasons.join(' and ') };
+  };
+
   const masterData = async (spec, body, previous = {}) => {
     const data = {};
     for (const field of spec.fields) if (body[field] !== undefined) data[field] = body[field];
@@ -364,9 +407,21 @@ function createProductionRouter(options = {}) {
       return { ...plain(after), id: id(after) };
     }, true));
     router.delete(`/${spec.path}/:id`, auth, admin, handle(async req => {
-      const before = await get(spec.model, req.params.id, spec.label), after = await spec.model.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
-      await audit(req, 'master-archived', `Archived ${spec.label} "${before.name}"`, before, after);
-      return { ok: true };
+      const before = await get(spec.model, req.params.id, spec.label);
+      const held = await dependents(spec, before);
+      // Nothing has ever been recorded against it, so there is nothing to
+      // explain later: it goes for good.
+      if (!held.total) {
+        await spec.model.deleteOne({ _id: id(before) });
+        await audit(req, 'master-deleted', `Deleted ${spec.label} "${before.name}" — nothing was recorded against it`, before, null);
+        return { ok: true, removed: true, uses: 0, message: `${before.name} deleted.` };
+      }
+      const after = await spec.model.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
+      await audit(req, 'master-archived', `Archived ${spec.label} "${before.name}" — ${held.why}`, before, after);
+      return {
+        ok: true, removed: false, uses: held.total,
+        message: `${before.name} archived, not deleted — ${held.why}. It will not appear for new work, and old records still read correctly.`
+      };
     }, true));
   }
   /**
@@ -667,13 +722,20 @@ function createProductionRouter(options = {}) {
       const broken = damage
         .filter(row => flat(row.toyName) === flat(toy.name))
         .reduce((sum, row) => sum + Number(row.qty || 0), 0);
-      const ready = line.length ? line[line.length - 1].pieces : 0;
-      const waiting = line.slice(1).map((step, index) => ({
+      // How many pieces have got past every step up to this one. A step cannot
+      // have finished more than the step before it fed to it, whatever the two
+      // counts say on their own — so it is the running smallest that follows a
+      // piece down the line, and that is what makes the figures add up:
+      // what arrived = not started + in the line + ready.
+      let carried = Infinity;
+      const passed = line.map(step => { carried = Math.min(carried, step.pieces); return carried; });
+      const ready = passed.length ? passed[passed.length - 1] : 0;
+      const waiting = passed.slice(1).map((reached, index) => ({
         after: line[index].name,
-        before: step.name,
-        pieces: Math.max(0, line[index].pieces - step.pieces)
+        before: line[index + 1].name,
+        pieces: passed[index] - reached
       })).filter(row => row.pieces > 0);
-      const notStarted = intake !== null && line.length ? Math.max(0, intake - line[0].pieces) : null;
+      const notStarted = intake !== null && passed.length ? Math.max(0, intake - passed[0]) : null;
 
       return {
         id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '', isModel: !isBench(toy),
