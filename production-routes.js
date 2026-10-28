@@ -598,7 +598,11 @@ function createProductionRouter(options = {}) {
     ]);
     const typeName = new Map(types.map(row => [id(row), row.name]));
     const flat = rules.flatName;
-    const live = toys.filter(toy => toy.isActive !== false);
+    // The same rule the catalogue itself follows: a toy under an archived
+    // category is out of the catalogue, so it has no card here either. Without
+    // this, tracking shows models that cannot be found or edited anywhere.
+    const liveTypes = new Set(types.filter(row => row.isActive !== false).map(id));
+    const live = toys.filter(toy => toy.isActive !== false && liveTypes.has(id(toy.typeId)));
     // A packing or checking bench is written as a toy whose work steps are
     // named after the models that pass through it — "Window packing" with a
     // step called "Bird". Those are not models and get no card of their own;
