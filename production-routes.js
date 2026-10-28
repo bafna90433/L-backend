@@ -235,7 +235,7 @@ function createProductionRouter(options = {}) {
     return {
       features: { training: true, multiWork: true, manualEntryBy: true },
       types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', stepsOnly: row.stepsOnly === true })),
-      toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
+      toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', isFinal: row.isFinal === true })),
       processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', isFinal: row.isFinal === true, packs: (row.packs || []).map(pack => ({ toyId: id(pack.toyId), qty: Number(pack.qty) || 1 })) })),
       workers: workers.filter(row => row.status === 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       archivedWorkers: workers.filter(row => row.status !== 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
@@ -321,7 +321,7 @@ function createProductionRouter(options = {}) {
   }, true));
   const specs = [
     { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl', 'stepsOnly'] },
-    { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId', 'imageUrl'] },
+    { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId', 'imageUrl', 'isFinal'] },
     { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl', 'packs', 'isFinal'] },
     { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name', 'toyId'] }
   ];
@@ -782,9 +782,18 @@ function createProductionRouter(options = {}) {
         .sort(order);
       const ordered = [...own, ...packing];
       // The floor decides where a toy is finished: some models end at checking,
-      // some two steps earlier. Whatever is marked closes the line, and what
-      // comes after it is somebody else's business.
-      const ends = ordered.findIndex(step => step.isFinal === true);
+      // some two steps earlier. A step can be marked, or the whole bench it
+      // sits on — "finished once it gets here" — and what comes after the mark
+      // is somebody else's business.
+      const closes = step => step.isFinal === true || live.find(row => id(row) === id(step.toyId))?.isFinal === true;
+      const marked = ordered.findIndex(closes);
+      let ends = -1;
+      if (marked >= 0) {
+        // A marked bench ends after its own last step, not after its first.
+        ends = marked;
+        const bench = id(ordered[marked].toyId);
+        while (ends + 1 < ordered.length && id(ordered[ends + 1].toyId) === bench) ends += 1;
+      }
       const line = (ends >= 0 ? ordered.slice(0, ends + 1) : ordered).map(step => ({
         id: id(step),
         name: step.name,

@@ -270,6 +270,10 @@ const ToySchema = new mongoose.Schema({
   name: { type: String, required: true },
   code: { type: String, default: '' },
   sortOrder: { type: Number, default: 0 },
+  // The toy is finished once its work gets here. On a model it means its own
+  // steps are the whole line; on a packing or checking bench it means the line
+  // ends at that bench.
+  isFinal: { type: Boolean, default: false },
   // A photo of it, parked on ImageKit. Blank until somebody uploads one.
   imageUrl: { type: String, default: '' },
   isActive: { type: Boolean, default: true },

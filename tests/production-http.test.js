@@ -674,6 +674,15 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   assert.equal(ends.ready, 300);
 
   await request('admin', 'PUT', '/processes/gum', { isFinal: false });
+
+  // A whole bench can close it instead, and it closes after the bench's own
+  // last step rather than its first.
+  await request('admin', 'PUT', '/toys/pack', { isFinal: true });
+  const atBench = await request('owner', 'GET', '/tracking');
+  const upToPack = atBench.body.toys.find(row => row.id === 'toy');
+  assert.deepEqual(upToPack.steps.map(step => step.name), ['Body assembly', 'Wings gumming', 'BIRD']);
+  assert.equal(upToPack.ready, 250);
+  await request('admin', 'PUT', '/toys/pack', { isFinal: false });
   // Asked for a day with nothing in it, the same line reads empty — and the
   // shelf's opening count belongs to "from the beginning", not to a window.
   const quiet = await request('owner', 'GET', '/tracking?from=2026-01-01&to=2026-01-01');

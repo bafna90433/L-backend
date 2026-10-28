@@ -92,7 +92,7 @@ const specs = {
   },
   Toy: {
     delegate: 'toy',
-    fields: ['typeId', 'name', 'code', 'sortOrder', 'imageUrl', 'isActive', 'createdAt'],
+    fields: ['typeId', 'name', 'code', 'sortOrder', 'imageUrl', 'isFinal', 'isActive', 'createdAt'],
     populate: { typeId: { relation: 'type', model: 'ToyType' } }
   },
   ToyProcess: {
