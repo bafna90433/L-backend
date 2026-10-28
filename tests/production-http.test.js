@@ -203,11 +203,15 @@ test('HTTP worker management preserves payroll and history when archived', async
   assert.equal(created.after.gender, 'Female');
   assert.equal((await request('admin', 'PUT', '/workers/w1', { name: 'Renamed Worker', monthlySalary: 0, whatsapp: 'overwrite', shiftStart: '08:30' })).status, 200);
   assert.equal(data.Labour[0].monthlySalary, 25000); assert.equal(data.Labour[0].whatsapp, 'existing-phone'); assert.equal(data.Labour[0].shiftStart, '07:00');
+  // Deleting is final: the person goes from the catalogue, and the work they
+  // did keeps its numbers while losing the name it was recorded under.
   assert.equal((await request('admin', 'DELETE', '/workers/w1')).status, 200);
   const masters = await request('owner', 'GET', '/masters');
-  assert.equal(masters.body.workers.some(row => row.id === 'w1'), false); assert.equal(masters.body.archivedWorkers.find(row => row.id === 'w1').name, 'Renamed Worker');
-  assert.equal((await request('owner', 'GET', '/day?date=2026-10-05')).body.entries[0].workerName, 'Renamed Worker');
-  assert.equal((await request('owner', 'GET', '/report?from=2026-10-05&to=2026-10-05')).body.workers[0].name, 'Renamed Worker');
+  assert.equal(masters.body.workers.some(row => row.id === 'w1'), false);
+  assert.equal(masters.body.archivedWorkers.some(row => row.id === 'w1'), false);
+  const day = await request('owner', 'GET', '/day?date=2026-10-05');
+  assert.equal(day.body.entries[0].workerName, 'Archived worker');
+  assert.equal(day.body.entries[0].pieces, 100);
 });
 test('HTTP report has zero-filled range, full entry history, process totals and prior baseline outside range', async t => {
   const { request, data, entry } = await setup(t);
@@ -589,27 +593,32 @@ test('HTTP one worker is marked supervisor, and the others are hung on them', as
   assert.equal(renamed.body.supervisorId, 'w2');
 });
 
-test('HTTP deleting removes what nothing was recorded against, and archives the rest', async t => {
+test('HTTP deleting removes the row, and what only existed under it', async t => {
   const { request, entry, data } = await setup(t);
+  data.StockItem.push({ _id: 'screw', name: 'Screw', code: 'S1', kind: 'part', unit: 'pcs', opening: 100, isActive: true });
+  data.StockRecipe.push({ _id: 'r1', toyId: 'toy', processId: 'process', itemId: 'screw', qty: 8, per: 1 });
 
-  // A toy nobody ever worked on goes for good.
-  const spare = await request('admin', 'POST', '/toys', { name: 'Spare model', typeId: 'type' });
-  const gone = await request('admin', 'DELETE', `/toys/${spare.body.id}`);
-  assert.equal(gone.body.removed, true);
-  assert.equal(data.Toy.some(row => row._id === spare.body.id), false);
-
-  // One with work saved against it is archived instead, and says why.
+  // What was recorded stays, and says so.
   await request('supervisor', 'POST', '/entries', entry({ pieces: 50, enteredByName: 'Ramya' }));
-  const kept = await request('admin', 'DELETE', '/toys/toy');
-  assert.equal(kept.body.removed, false);
-  assert.match(kept.body.message, /archived, not deleted/);
-  assert.match(kept.body.message, /1 saved entry/);
-  assert.equal(data.Toy.find(row => row._id === 'toy').isActive, false);
+  const gone = await request('admin', 'DELETE', '/toys/toy');
+  assert.equal(gone.body.removed, true);
+  assert.match(gone.body.message, /1 work step/);
+  assert.match(gone.body.message, /1 saved entry will now show it as missing/);
+  assert.equal(data.Toy.some(row => row._id === 'toy'), false);
+  // The work step and the parts mapped to it went with the toy; the entry and
+  // the shelf did not.
+  assert.equal(data.ToyProcess.some(row => row._id === 'process'), false);
+  assert.equal(data.StockRecipe.length, 0);
+  assert.equal(data.ProductionEntry.length, 1);
+  assert.equal(data.StockItem.length, 1);
 
-  // The same for people: a worker with a shift behind them is kept.
-  assert.equal((await request('admin', 'DELETE', '/workers/w1')).body.removed, false);
-  assert.equal((await request('admin', 'DELETE', '/workers/w2')).body.removed, true);
+  // People go the same way, and nobody is left reporting to a ghost.
+  await request('admin', 'PUT', '/workers/w2', { name: 'Female Worker', gender: 'Female', isSupervisor: true });
+  await request('admin', 'PUT', '/workers/w1', { name: 'Male Worker', gender: 'Male', supervisorId: 'w2' });
+  const left = await request('admin', 'DELETE', '/workers/w2');
+  assert.equal(left.body.removed, true);
   assert.equal(data.Labour.some(row => row._id === 'w2'), false);
+  assert.equal(data.Labour.find(row => row._id === 'w1').supervisorId, '');
 });
 
 test('HTTP tracking follows a toy down its line and says what is stuck', async t => {

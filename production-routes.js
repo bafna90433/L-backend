@@ -308,18 +308,15 @@ function createProductionRouter(options = {}) {
     const before = await get(Labour, req.params.id, 'Worker');
     const entries = (await ProductionEntry.find({})).filter(entry => id(entry.labourId) === id(before)).length;
     const under = (await Labour.find({})).filter(row => id(row.supervisorId) === id(before) && row.status === 'active').length;
-    // Somebody who never recorded a shift leaves nothing behind to explain.
-    if (!entries && !under) {
-      await Labour.deleteOne({ _id: id(before) });
-      await audit(req, 'worker-deleted', `Deleted worker "${before.name}" — no production was recorded for them`, workerView(before), null);
-      return { ok: true, removed: true, uses: 0, message: `${before.name} deleted.` };
+    // Nobody is left pointing at a person who is gone.
+    for (const row of (await Labour.find({})).filter(row => id(row.supervisorId) === id(before))) {
+      await Labour.findByIdAndUpdate(id(row), { supervisorId: '' });
     }
-    const why = [entries && `${entries} saved entr${entries === 1 ? 'y' : 'ies'}`, under && `${under} worker${under === 1 ? '' : 's'} under them`].filter(Boolean).join(' and ');
-    const after = await Labour.findByIdAndUpdate(req.params.id, { status: 'inactive' }, { new: true });
-    await audit(req, 'worker-archived', `Archived worker "${before.name}" — ${why}`, workerView(before), workerView(after));
+    await Labour.deleteOne({ _id: id(before) });
+    await audit(req, 'worker-deleted', `Deleted worker "${before.name}"${entries ? ` — ${entries} saved entries still name them` : ''}`, workerView(before), null);
     return {
-      ok: true, removed: false, uses: entries + under,
-      message: `${before.name} archived, not deleted — ${why}. Their past production stays in the reports.`
+      ok: true, removed: true, uses: entries + under,
+      message: `${before.name} deleted.${entries ? ` ${entries} saved ${entries === 1 ? 'entry' : 'entries'} will now show the worker as missing.` : ''}${under ? ` ${under} worker${under === 1 ? '' : 's'} now have no supervisor.` : ''}`
     };
   }, true));
   const specs = [
@@ -355,7 +352,54 @@ function createProductionRouter(options = {}) {
       add((await DamageEntry.find({})).filter(entry => id(entry.partId) === id(row)).length, 'damage record');
     }
     const total = reasons.reduce((sum, text) => sum + Number(text.split(' ')[0]), 0);
-    return { total, why: reasons.join(' and ') };
+    const named = reasons.find(text => text.includes('saved entry') || text.includes('saved entries'));
+    return { total, entries: named ? Number(named.split(' ')[0]) : 0, why: reasons.join(' and ') };
+  };
+
+  /**
+   * Take the rows that only existed under this one with it.
+   *
+   * A work step belongs to its toy and a toy to its category: left behind,
+   * they are unreachable from every screen but still turn up in counts. What
+   * was *recorded* — production, damage, stock movements — is never touched.
+   */
+  const sweep = async (spec, row) => {
+    const gone = [];
+    const dropRecipe = async where => {
+      if (!StockRecipe) return 0;
+      const lines = (await StockRecipe.find({})).filter(where);
+      for (const line of lines) await StockRecipe.deleteOne({ _id: id(line) });
+      return lines.length;
+    };
+    const dropSteps = async toyId => {
+      const own = (await ToyProcess.find({})).filter(step => id(step.toyId) === toyId);
+      for (const step of own) {
+        await dropRecipe(line => id(line.processId) === id(step));
+        await ToyProcess.deleteOne({ _id: id(step) });
+      }
+      return own.length;
+    };
+    if (spec.path === 'processes') {
+      const lines = await dropRecipe(line => id(line.processId) === id(row));
+      if (lines) gone.push(`${lines} mapped part${lines === 1 ? '' : 's'}`);
+    }
+    if (spec.path === 'toys') {
+      const steps = await dropSteps(id(row));
+      await dropRecipe(line => id(line.toyId) === id(row));
+      if (steps) gone.push(`${steps} work step${steps === 1 ? '' : 's'}`);
+    }
+    if (spec.path === 'toy-types') {
+      const toys = (await Toy.find({})).filter(toy => id(toy.typeId) === id(row));
+      let steps = 0;
+      for (const toy of toys) {
+        steps += await dropSteps(id(toy));
+        await dropRecipe(line => id(line.toyId) === id(toy));
+        await Toy.deleteOne({ _id: id(toy) });
+      }
+      if (toys.length) gone.push(`${toys.length} toy${toys.length === 1 ? '' : 's'}`);
+      if (steps) gone.push(`${steps} work step${steps === 1 ? '' : 's'}`);
+    }
+    return gone.join(' and ');
   };
 
   const masterData = async (spec, body, previous = {}) => {
@@ -410,18 +454,16 @@ function createProductionRouter(options = {}) {
     router.delete(`/${spec.path}/:id`, auth, admin, handle(async req => {
       const before = await get(spec.model, req.params.id, spec.label);
       const held = await dependents(spec, before);
-      // Nothing has ever been recorded against it, so there is nothing to
-      // explain later: it goes for good.
-      if (!held.total) {
-        await spec.model.deleteOne({ _id: id(before) });
-        await audit(req, 'master-deleted', `Deleted ${spec.label} "${before.name}" — nothing was recorded against it`, before, null);
-        return { ok: true, removed: true, uses: 0, message: `${before.name} deleted.` };
-      }
-      const after = await spec.model.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true });
-      await audit(req, 'master-archived', `Archived ${spec.label} "${before.name}" — ${held.why}`, before, after);
+      // Delete means delete. What hangs below it goes with it, because a work
+      // step without its toy can be reached from nowhere; what was recorded
+      // against it stays, keeping its numbers, and reads as missing from here
+      // on — which is the price of the row being gone and is said out loud.
+      const swept = await sweep(spec, before);
+      await spec.model.deleteOne({ _id: id(before) });
+      await audit(req, 'master-deleted', `Deleted ${spec.label} "${before.name}"${held.total ? ` — ${held.why} still name it` : ''}`, before, null);
       return {
-        ok: true, removed: false, uses: held.total,
-        message: `${before.name} archived, not deleted — ${held.why}. It will not appear for new work, and old records still read correctly.`
+        ok: true, removed: true, uses: held.total,
+        message: `${before.name} deleted${swept ? ` with ${swept}` : ''}.${held.entries ? ` ${held.entries} saved ${held.entries === 1 ? 'entry' : 'entries'} will now show it as missing.` : ''}`
       };
     }, true));
   }
