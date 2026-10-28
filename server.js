@@ -31,6 +31,10 @@ app.use('/api/image', express.json({ limit: '40mb' }), imageRoutes);
 // The AI Council accepts photos to analyse, so it needs the same headroom.
 app.use('/api/ai', express.json({ limit: '30mb' }), aiRoutes);
 
+// A photo straight off a phone is several megabytes before it is even encoded,
+// and the parser that runs first decides the limit, so this one goes ahead of
+// the general one rather than raising the ceiling for every route.
+app.use('/api/production/image', express.json({ limit: '25mb' }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
