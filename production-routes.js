@@ -599,6 +599,21 @@ function createProductionRouter(options = {}) {
     const typeName = new Map(types.map(row => [id(row), row.name]));
     const flat = rules.flatName;
     const live = toys.filter(toy => toy.isActive !== false);
+    // A packing or checking bench is written as a toy whose work steps are
+    // named after the models that pass through it — "Window packing" with a
+    // step called "Bird". Those are not models and get no card of their own;
+    // their steps join the line of the model they belong to.
+    const modelNames = new Set(live.map(toy => flat(toy.name)));
+    // Two signs of a bench rather than a model: its steps are named after the
+    // models that pass through it, or it is itself named after a job. The
+    // catalogue is typed by hand and neither sign is proof, so this only
+    // decides which cards are shown first — nothing is dropped.
+    const JOB_WORDS = /(packing|packet|checking|stickering|cleaning|damage|assembly|assemble|joint|gumming|cutting|fitting)/i;
+    const isBench = toy => {
+      const own = steps.filter(step => step.isActive !== false && id(step.toyId) === id(toy));
+      if (own.length > 0 && own.some(step => flat(step.name) !== flat(toy.name) && modelNames.has(flat(step.name)))) return true;
+      return JOB_WORDS.test(String(toy.name)) || JOB_WORDS.test(typeName.get(id(toy.typeId)) || '');
+    };
     const madeOn = new Map();
     for (const row of entries) {
       const key = `${id(row.toyId)}|${id(row.processId)}`;
@@ -657,7 +672,7 @@ function createProductionRouter(options = {}) {
       const notStarted = intake !== null && line.length ? Math.max(0, intake - line[0].pieces) : null;
 
       return {
-        id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '',
+        id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '', isModel: !isBench(toy),
         typeName: typeName.get(id(toy.typeId)) || '',
         intake, intakeFrom, ready, damage: broken, notStarted, waiting, steps: line
       };

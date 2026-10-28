@@ -607,6 +607,10 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
 
   const seen = await request('owner', 'GET', '/tracking');
   assert.equal(seen.status, 200);
+  // The packing bench is listed, but not as a model: its steps are named
+  // after the toys that pass through it.
+  assert.equal(seen.body.toys.find(row => row.id === 'pack').isModel, false);
+  assert.equal(seen.body.toys.find(row => row.id === 'toy').isModel, true);
   const bird = seen.body.toys.find(row => row.id === 'toy');
   assert.equal(bird.intake, 500);
   assert.equal(bird.intakeFrom, 'Body (B1)');
