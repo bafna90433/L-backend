@@ -423,6 +423,12 @@ model ToyProcess {
   target12h     Int      @default(0)
   /// A photo of it, parked on ImageKit. Blank until somebody uploads one.
   imageUrl      String   @default("")
+  /**
+   * What one recorded piece of this step holds: [{ toyId, qty }]. Packing is
+   * where it matters — a packet can carry a helicopter and a plane, so 500
+   * packets are 500 of each. Empty on an ordinary step.
+   */
+  packs         Json     @default("[]")
   isActive      Boolean  @default(true)
   createdAt     DateTime @default(now())
 

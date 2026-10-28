@@ -236,7 +236,7 @@ function createProductionRouter(options = {}) {
       features: { training: true, multiWork: true, manualEntryBy: true },
       types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', stepsOnly: row.stepsOnly === true })),
       toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
-      processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '' })),
+      processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', packs: (row.packs || []).map(pack => ({ toyId: id(pack.toyId), qty: Number(pack.qty) || 1 })) })),
       workers: workers.filter(row => row.status === 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       archivedWorkers: workers.filter(row => row.status !== 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
       // The parts the floor has typed, so the office can rename them in one
@@ -322,7 +322,7 @@ function createProductionRouter(options = {}) {
   const specs = [
     { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl', 'stepsOnly'] },
     { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId', 'imageUrl'] },
-    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl'] },
+    { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl', 'packs'] },
     { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name', 'toyId'] }
   ];
   /**
@@ -432,6 +432,22 @@ function createProductionRouter(options = {}) {
         && id(row.toyId) === data.toyId
         && row.name.trim().toLowerCase() === data.name.toLowerCase());
       if (clash) fail(`${clash.name} is already a part of this toy.`);
+    }
+    if (spec.path === 'processes' && data.packs !== undefined) {
+      // What one packet holds: a toy and how many of it. The same toy twice
+      // would be two answers to one question, so it is said once.
+      const rows = Array.isArray(data.packs) ? data.packs.slice(0, 10) : [];
+      const live = (await Toy.find({})).filter(toy => toy.isActive !== false).map(id);
+      const seen = new Set();
+      data.packs = rows.map(row => {
+        const toyId = id(row.toyId);
+        if (!live.includes(toyId)) fail('Choose a toy that is still in the catalogue.');
+        if (seen.has(toyId)) fail('That toy is already in this packet.');
+        seen.add(toyId);
+        const qty = Number(row.qty);
+        if (!Number.isFinite(qty) || qty < 1 || qty > 1000) fail('How many of it go in one packet must be between 1 and 1000.');
+        return { toyId, qty: Math.round(qty) };
+      });
     }
     if (spec.path === 'processes') {
       const toy = await activeParent(Toy, merged.toyId, 'Toy'); await activeParent(ToyType, id(toy.typeId), 'Category'); data.toyId = id(merged.toyId);
@@ -737,8 +753,13 @@ function createProductionRouter(options = {}) {
       // Packing is written the other way round — the toy is the packing bench
       // and the step names the model — so those steps belong to this line too,
       // and they come after the making.
+      // A bench step belongs to this model if it is named after it, or if it
+      // says so itself: a packet holding a helicopter and a plane is on the
+      // line of both, and each of them counts packets rather than the pieces
+      // inside — 500 packets are 500 helicopters and 500 planes.
+      const packed = step => (step.packs || []).find(pack => id(pack.toyId) === id(toy));
       const packing = steps
-        .filter(step => step.isActive !== false && id(step.toyId) !== id(toy) && flat(step.name) === flat(toy.name))
+        .filter(step => step.isActive !== false && id(step.toyId) !== id(toy) && (flat(step.name) === flat(toy.name) || packed(step)))
         .sort(order);
       const line = [...own, ...packing].map(step => ({
         id: id(step),
@@ -749,7 +770,7 @@ function createProductionRouter(options = {}) {
         // assembly, which is the name the floor knows the job by.
         underType: id(step.toyId) === id(toy) ? '' : (typeName.get(id(live.find(row => id(row) === id(step.toyId))?.typeId)) || ''),
         imageUrl: step.imageUrl || '',
-        pieces: madeOn.get(`${id(step.toyId)}|${id(step)}`) || 0
+        pieces: (madeOn.get(`${id(step.toyId)}|${id(step)}`) || 0) * (packed(step) ? Number(packed(step).qty) || 1 : 1)
       }));
 
       // How many pieces the parts on hand could make: the part that runs out

@@ -280,6 +280,10 @@ const ToyProcessSchema = new mongoose.Schema({
   toyId: { type: mongoose.Schema.Types.ObjectId, ref: 'Toy', required: true },
   name: { type: String, required: true },
   sortOrder: { type: Number, default: 0 },
+  // What one recorded piece of this step holds. Packing is where this matters:
+  // a single packet can carry a helicopter and a plane, so 500 packets are 500
+  // of each — not a thousand of anything. Empty on an ordinary step.
+  packs: { type: [{ toyId: String, qty: Number }], default: [] },
   // A photo of it, parked on ImageKit. Blank until somebody uploads one.
   imageUrl: { type: String, default: '' },
   // Expected pieces an hour. 0 means no target has been set.

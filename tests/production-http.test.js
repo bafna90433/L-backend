@@ -640,6 +640,12 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   await request('supervisor', 'POST', '/entries', entry({ toyId: 'pack', processId: 'pack-bird', pieces: 250, enteredByName: 'Ramya' }));
   await request('supervisor', 'POST', '/entries', entry({ toyId: 'check', processId: 'check-bird', pieces: 220, enteredByName: 'Ramya' }));
 
+  // A packing bench that holds this model, said by the packet rather than by
+  // the step's name: one packet carries two birds.
+  data.Toy.push({ _id: 'twin', name: 'Twin packing', typeId: 'type', isActive: true });
+  data.ToyProcess.push({ _id: 'twin-pack', name: 'Pair pack', toyId: 'twin', sortOrder: 3, isActive: true, packs: [{ toyId: 'toy', qty: 2 }] });
+  await request('supervisor', 'POST', '/entries', entry({ toyId: 'twin', processId: 'twin-pack', pieces: 60, enteredByName: 'Ramya' }));
+
   const seen = await request('owner', 'GET', '/tracking');
   assert.equal(seen.status, 200);
   // The packing bench is listed, but not as a model: its steps are named
@@ -649,13 +655,14 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   const bird = seen.body.toys.find(row => row.id === 'toy');
   assert.equal(bird.intake, 500);
   assert.equal(bird.intakeFrom, 'Body (B1)');
-  assert.deepEqual(bird.steps.map(step => [step.name, step.pieces]), [['Body assembly', 400], ['Wings gumming', 300], ['BIRD', 250], ['Bird', 220]]);
-  assert.equal(bird.ready, 220);
+  assert.deepEqual(bird.steps.map(step => [step.name, step.pieces]), [['Body assembly', 400], ['Wings gumming', 300], ['BIRD', 250], ['Bird', 220], ['Pair pack', 120]]);
+  assert.equal(bird.ready, 120);
   assert.equal(bird.notStarted, 100);
   assert.deepEqual(bird.waiting, [
     { after: 'Body assembly', before: 'Wings gumming', pieces: 100 },
     { after: 'Wings gumming', before: 'BIRD', pieces: 50 },
-    { after: 'BIRD', before: 'Bird', pieces: 30 }
+    { after: 'BIRD', before: 'Bird', pieces: 30 },
+    { after: 'Bird', before: 'Pair pack', pieces: 100 }
   ]);
 });
 
