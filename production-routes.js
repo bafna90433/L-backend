@@ -17,6 +17,17 @@ function createProductionRouter(options = {}) {
   // Shift and break times are stored, not compiled in, so the office can change
   // them. Re-read briefly rather than per request: every handler needs them.
   const SHIFT_KEY = 'production.shifts';
+  // Where "from the beginning" starts for Toy tracking. Material can run out,
+  // and whatever gets made off the scraps left on the shelf until more
+  // arrives is not the real line — so tracking counts from a date the floor
+  // sets for itself, not from whenever this system first kept records. Unset,
+  // nothing counts yet.
+  const TRACKING_START_KEY = 'production.trackingStart';
+  const trackingStart = async () => {
+    if (!SystemSettings) return '';
+    const row = await SystemSettings.findOne({ key: TRACKING_START_KEY });
+    return /^\d{4}-\d{2}-\d{2}$/.test(row?.value?.date || '') ? row.value.date : '';
+  };
   // Production-only metadata: never added to the shared worker/payroll response.
   const TRAINING_PREFIX = 'production.training.';
   const trainingSchedules = async () => new Map((SystemSettings ? await SystemSettings.find({}) : []).filter(row => row.key.startsWith(TRAINING_PREFIX)).map(row => [row.key.slice(TRAINING_PREFIX.length), row.value || {}]));
@@ -101,6 +112,16 @@ function createProductionRouter(options = {}) {
     return [gender, { hours: minutes / 60, minutes, label: shiftFor({ gender }).label }];
   }));
   router.get('/shifts', auth, read, handle(async () => ({ ...rules.shiftSettings(), hours: shiftHours(), labels: { Male: shiftFor({ gender: 'Male' }).label, Female: shiftFor({ gender: 'Female' }).label } })));
+  router.get('/tracking-settings', auth, read, handle(async () => ({ trackingStart: await trackingStart() })));
+  router.put('/tracking-settings', auth, admin, handle(async req => {
+    if (!SystemSettings) fail('Settings are not available on this server.');
+    const date = String(req.body?.trackingStart || '').trim();
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) fail('Give a valid date.');
+    const before = await trackingStart();
+    await SystemSettings.findOneAndUpdate({ key: TRACKING_START_KEY }, { key: TRACKING_START_KEY, value: { date } }, { upsert: true, new: true });
+    await audit(req, 'tracking-start-updated', date ? `Toy tracking now counts from ${date}` : 'Toy tracking start date cleared — nothing will count until one is set', { trackingStart: before }, { trackingStart: date });
+    return { trackingStart: date };
+  }, true));
   router.put('/shifts', auth, admin, handle(async req => {
     if (!SystemSettings) fail('Shift settings are not available on this server.');
     const value = rules.readShiftSettings(req.body || {});
@@ -724,11 +745,18 @@ function createProductionRouter(options = {}) {
    */
   const trackToys = async ({ from = '', to = '' } = {}) => {
     // A window, when the owner asks for one: yesterday's work, last month's,
-    // or a stretch they typed. Without it everything counts from the
-    // beginning, which is the question "where is my fifty thousand".
-    const since = from ? dayStart(from) : null;
+    // or a stretch they typed. Without one, "from the beginning" is read off
+    // the floor's own start date rather than from whenever this system first
+    // kept records — and until that date is set, nothing counts at all, so a
+    // run worked off whatever material is left on the shelf is never read as
+    // the real line.
+    const openEnded = !from && !to;
+    const configuredStart = openEnded ? await trackingStart() : '';
+    const blocked = openEnded && !configuredStart;
+    const since = from ? dayStart(from) : configuredStart ? dayStart(configuredStart) : null;
     const until = to ? dayEnd(to) : null;
     const within = when => {
+      if (blocked) return false;
       if (!since && !until) return true;
       const at = new Date(when || 0).getTime();
       return (!since || at >= since.getTime()) && (!until || at <= until.getTime());
@@ -773,7 +801,11 @@ function createProductionRouter(options = {}) {
     // many pieces the parts that arrived could ever make.
     // The opening count is where the shelf started, so it belongs to "from the
     // beginning" and to nothing narrower.
-    const arrived = new Map(items.map(item => [id(item), since || until ? 0 : Number(item.opening || 0)]));
+    // Opening stock belongs to "the beginning" itself, whichever date that is
+    // — the floor's configured start, or no gate at all. It does not belong to
+    // a narrower window the caller asked for on top of that, since nothing
+    // says how much of it was still on the shelf when that window began.
+    const arrived = new Map(items.map(item => [id(item), blocked || (!openEnded && (since || until)) ? 0 : Number(item.opening || 0)]));
     for (const move of moves) {
       if (String(move.reason) !== 'inward' || !within(move.date)) continue;
       arrived.set(id(move.itemId), (arrived.get(id(move.itemId)) || 0) + Number(move.qty || 0));
@@ -904,7 +936,8 @@ function createProductionRouter(options = {}) {
   };
   router.get('/tracking', auth, report, handle(async req => {
     const from = String(req.query.from || ''), to = String(req.query.to || '');
-    return { from, to, toys: await trackToys({ from, to }) };
+    const [toys, trackingStarted] = await Promise.all([trackToys({ from, to }), trackingStart()]);
+    return { from, to, toys, trackingStart: trackingStarted };
   }));
 
   router.get('/report', auth, report, handle(req => buildReport(req.query)));

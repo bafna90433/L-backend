@@ -650,6 +650,10 @@ test('HTTP deleting removes the row, and what only existed under it', async t =>
 
 test('HTTP tracking follows a toy down its line and says what is stuck', async t => {
   const { request, entry, data } = await setup(t);
+  // "From the beginning" now reads from a start date the floor sets for
+  // itself; this test is about the line, not about that gate, so the gate is
+  // opened well before anything in it happens.
+  data.SystemSettings.push({ _id: 'start', key: 'production.trackingStart', value: { date: '2026-01-01' } });
   // Bird is made in two steps and packed on a bench of its own, which is
   // written the other way round: the toy is the packing, the step is the toy.
   data.ToyProcess.push({ _id: 'gum', name: 'Wings gumming', toyId: 'toy', sortOrder: 2, isActive: true });
@@ -741,6 +745,56 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   const thatDay = quiet.body.toys.find(row => row.id === 'toy');
   assert.equal(thatDay.steps.every(step => step.pieces === 0), true);
   assert.equal(thatDay.intake, 0);
+});
+
+test('HTTP tracking counts nothing until the floor sets its own start date', async t => {
+  const { request, entry, data } = await setup(t);
+  data.StockItem.push({ _id: 'body', name: 'Body', code: 'B1', kind: 'part', unit: 'pcs', opening: 500, isActive: true });
+  data.StockRecipe.push({ _id: 'r1', toyId: 'toy', processId: 'process', itemId: 'body', qty: 1, per: 1 });
+  await request('supervisor', 'POST', '/entries', entry({ date: '2026-10-01', pieces: 400, enteredByName: 'Ramya' }));
+
+  // Unset, nothing counts at all — not the entry just saved, not the stock
+  // already on the shelf.
+  const before = await request('owner', 'GET', '/tracking');
+  assert.equal(before.status, 200);
+  assert.equal(before.body.trackingStart, '');
+  const blind = before.body.toys.find(row => row.id === 'toy');
+  assert.equal(blind.steps.every(step => step.pieces === 0), true);
+  assert.equal(blind.intake, 0);
+
+  // Only production masters may set it.
+  const refused = await request('supervisor', 'PUT', '/tracking-settings', { trackingStart: '2026-10-10' });
+  assert.equal(refused.status, 403);
+  const bad = await request('admin', 'PUT', '/tracking-settings', { trackingStart: 'not-a-date' });
+  assert.equal(bad.status, 400);
+
+  // Set to a date after the entry already saved: that entry still does not
+  // count, because it was made before the line the floor says is the real one.
+  const set = await request('admin', 'PUT', '/tracking-settings', { trackingStart: '2026-10-10' });
+  assert.equal(set.status, 200);
+  assert.equal(set.body.trackingStart, '2026-10-10');
+  const still = await request('owner', 'GET', '/tracking');
+  assert.equal(still.body.trackingStart, '2026-10-10');
+  assert.equal(still.body.toys.find(row => row.id === 'toy').steps.every(step => step.pieces === 0), true);
+
+  // Work saved from that date on counts, opening stock included — it is "the
+  // beginning" now, not a narrower window on top of it.
+  await request('supervisor', 'POST', '/entries', entry({ date: '2026-10-10', pieces: 150, enteredByName: 'Ramya' }));
+  const after = await request('owner', 'GET', '/tracking');
+  const started = after.body.toys.find(row => row.id === 'toy');
+  assert.equal(started.steps[0].pieces, 150);
+  assert.equal(started.intake, 500);
+
+  // An explicit window from the owner's own filters still works as it always
+  // has, start date or not.
+  const explicit = await request('owner', 'GET', '/tracking?from=2026-01-01&to=2026-10-09');
+  assert.equal(explicit.body.toys.find(row => row.id === 'toy').intake, 0);
+
+  // Clearing it blinds tracking again.
+  await request('admin', 'PUT', '/tracking-settings', { trackingStart: '' });
+  const cleared = await request('owner', 'GET', '/tracking');
+  assert.equal(cleared.body.trackingStart, '');
+  assert.equal(cleared.body.toys.find(row => row.id === 'toy').steps.every(step => step.pieces === 0), true);
 });
 
 test('HTTP a catalogue photo is a link the app itself handed out', async t => {
