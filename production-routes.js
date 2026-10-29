@@ -810,7 +810,10 @@ function createProductionRouter(options = {}) {
       // read as the whole line being stuck.
       // The floor still decides where the making ends: some models are finished
       // two steps before their last one, and that step is marked.
-      const stops = own.findIndex(step => step.isFinal === true);
+      // A model marked finished says its own work steps are the whole line, so
+      // nothing inside it cuts it short. Only a model that is not marked reads
+      // a step's own mark — that is how a line is ended two steps early.
+      const stops = toy.isFinal === true ? -1 : own.findIndex(step => step.isFinal === true);
       // A bench can close the toy too — once it has been through that bench the
       // rest is somebody else's business — and a marked bench ends after its
       // own last step, not after its first.

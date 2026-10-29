@@ -709,6 +709,21 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   assert.equal(ends.markedEnd, true);
   assert.deepEqual(ends.after.map(step => [step.name, step.pieces]), [['BIRD', 250], ['Bird', 220], ['Pair pack', 120], ['Tag joint', 160]]);
 
+  // The model marked finished says its own steps are the whole line, so a mark
+  // inside it no longer cuts it short — this is how the line comes back after
+  // a step was marked by mistake.
+  data.ToyProcess.push({ _id: 'polish', name: 'Polish', toyId: 'toy', sortOrder: 3, isActive: true });
+  await request('supervisor', 'POST', '/entries', entry({ processId: 'polish', pieces: 280, enteredByName: 'Ramya' }));
+  const cut = await request('owner', 'GET', '/tracking');
+  assert.deepEqual(cut.body.toys.find(row => row.id === 'toy').steps.map(step => step.name), ['Body assembly', 'Wings gumming']);
+  await request('admin', 'PUT', '/toys/toy', { isFinal: true });
+  const whole = await request('owner', 'GET', '/tracking');
+  const full = whole.body.toys.find(row => row.id === 'toy');
+  assert.deepEqual(full.steps.map(step => step.name), ['Body assembly', 'Wings gumming', 'Polish']);
+  assert.equal(full.markedEnd, false);
+  await request('admin', 'PUT', '/toys/toy', { isFinal: false });
+  data.ToyProcess.find(row => row._id === 'polish').isActive = false;
+
   await request('admin', 'PUT', '/processes/gum', { isFinal: false });
 
   // A whole bench can close it instead, and it closes after the bench's own
