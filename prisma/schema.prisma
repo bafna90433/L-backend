@@ -554,6 +554,8 @@ model StockRecipe {
   itemId    String
   qty       Float    @default(1)
   per       Float    @default(1)
+  /// The step puts this on the shelf instead of taking it off.
+  makes     Boolean  @default(false)
   note      String   @default("")
   createdAt DateTime @default(now())
 

@@ -372,7 +372,7 @@ const ProductionLogSchema = new mongoose.Schema({
 const StockItemSchema = new mongoose.Schema({
   code: { type: String, default: '' },
   name: { type: String, required: true },
-  kind: { type: String, enum: ['part', 'screw', 'packing'], default: 'part' },
+  kind: { type: String, enum: ['part', 'screw', 'packing', 'made'], default: 'part' },
   unit: { type: String, default: 'pcs' },
   toyId: { type: String, default: '' },
   opening: { type: Number, default: 0 },
@@ -395,6 +395,9 @@ const StockRecipeSchema = new mongoose.Schema({
   itemId: { type: String, required: true },
   qty: { type: Number, default: 1 },
   per: { type: Number, default: 1 },
+  /** The step puts this on the shelf instead of taking it off: assembly makes
+   *  the loose pieces that packing then boxes up. */
+  makes: { type: Boolean, default: false },
   note: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now }
 });

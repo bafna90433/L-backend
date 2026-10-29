@@ -566,8 +566,12 @@ function createProductionRouter(options = {}) {
     for (const line of lines) {
       const per = Number(line.per) || 1, each = Number(line.qty) || 0;
       if (!each) continue;
+      // A line marked "makes" goes the other way: body assembly puts the
+      // toy's loose pieces on the shelf, and the packing step that boxes
+      // twelve of them up takes those twelve off again.
+      const way = line.makes === true ? 1 : -1;
       await StockMove.create({
-        date: entry.date, itemId: id(line.itemId), qty: -(Number(entry.pieces || 0) * each / per),
+        date: entry.date, itemId: id(line.itemId), qty: way * (Number(entry.pieces || 0) * each / per),
         reason: 'production', entryId: id(entry), toyId: id(entry.toyId), processId: id(entry.processId),
         pieces: Number(entry.pieces || 0), note: '', byName: req.user.name || '', createdAt: new Date()
       });

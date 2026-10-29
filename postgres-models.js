@@ -118,7 +118,7 @@ const specs = {
   },
   StockRecipe: {
     delegate: 'stockRecipe',
-    fields: ['toyId', 'processId', 'itemId', 'qty', 'per', 'note', 'createdAt']
+    fields: ['toyId', 'processId', 'itemId', 'qty', 'per', 'makes', 'note', 'createdAt']
   },
   StockMove: {
     delegate: 'stockMove',

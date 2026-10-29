@@ -569,6 +569,33 @@ test('HTTP saved work spends the shelf, and a correction gives it back', async t
   assert.equal(data.StockMove.length, 0);
 });
 
+test('HTTP assembly puts the pieces on the shelf and packing boxes them off it', async t => {
+  const { request, entry, data } = await setup(t);
+  // The toy's own pieces are stock too: body assembly makes them one for one,
+  // and the twelve-piece packing step takes twelve of them off with a box and
+  // a blister.
+  data.StockItem.push({ _id: 'pieces', name: 'Jet blaster pieces', code: '', kind: 'made', unit: 'pcs', toyId: 'toy', opening: 0, isActive: true });
+  data.StockItem.push({ _id: 'box12', name: '12-piece box', code: '', kind: 'packing', unit: 'pcs', toyId: 'toy', opening: 5000, isActive: true });
+  data.StockItem.push({ _id: 'blister12', name: '12-piece blister', code: '', kind: 'packing', unit: 'pcs', toyId: 'toy', opening: 5000, isActive: true });
+  data.StockRecipe.push({ _id: 'm1', toyId: 'toy', processId: 'process', itemId: 'pieces', qty: 1, per: 1, makes: true });
+  data.StockRecipe.push({ _id: 'p1', toyId: 'toy2', processId: 'process2', itemId: 'pieces', qty: 12, per: 1 });
+  data.StockRecipe.push({ _id: 'p2', toyId: 'toy2', processId: 'process2', itemId: 'box12', qty: 1, per: 1 });
+  data.StockRecipe.push({ _id: 'p3', toyId: 'toy2', processId: 'process2', itemId: 'blister12', qty: 1, per: 1 });
+
+  const assembled = await request('supervisor', 'POST', '/entries', entry({ pieces: 500, enteredByName: 'Ramya' }));
+  assert.equal(assembled.status, 200);
+  const shelf = () => data.StockMove.reduce((sum, move) => ({ ...sum, [move.itemId]: (sum[move.itemId] || 0) + move.qty }), {});
+  assert.deepEqual(shelf(), { pieces: 500 });
+
+  const packed = await request('supervisor', 'POST', '/entries', entry({ toyId: 'toy2', processId: 'process2', pieces: 200, enteredByName: 'Ramya' }));
+  assert.equal(packed.status, 200);
+  assert.deepEqual(shelf(), { pieces: 500 - 2400, box12: -200, blister12: -200 });
+
+  // A packing entry taken back leaves the pieces where assembly put them.
+  await request('supervisor', 'DELETE', `/entries/${packed.body.id}`);
+  assert.deepEqual(shelf(), { pieces: 500 });
+});
+
 test('HTTP one worker is marked supervisor, and the others are hung on them', async t => {
   const { request } = await setup(t);
 

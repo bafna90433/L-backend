@@ -8,7 +8,8 @@ const { resolveUserAccess } = require('./access-control');
    Three things, and they stay apart on purpose:
 
      items   — a part, a screw or packing material, with its opening figure
-     recipe  — what one work step spends to make a piece ("1 box per 8 pcs")
+     recipe  — what one work step spends to make a piece ("1 box per 8 pcs"),
+               or, marked "makes", what it puts on the shelf instead
      moves   — every movement, in or out, with what caused it
 
    A balance is never written anywhere. It is the opening figure plus the
@@ -273,15 +274,18 @@ function createStockRouter(options = {}) {
     const per = number(body.per ?? 1, 'Per pieces');
     if (!qty) fail('Quantity must be more than zero.');
     if (!per) fail('"Per pieces" must be more than zero.');
+    // Which way the shelf moves. Assembly makes the loose pieces a toy is
+    // counted in; packing takes twelve of them off and a box with them.
+    const makes = body.makes === true || body.makes === 'true';
     // One line per item on a step: two lines for the same item would both be
     // applied, and the shelf would fall by double.
     const clash = (await StockRecipe.find({})).find(row => id(row.toyId) === id(toy) && id(row.processId) === id(step) && id(row.itemId) === id(item));
     if (clash) {
-      const updated = await StockRecipe.findByIdAndUpdate(id(clash), { qty, per, note: String(body.note || '').slice(0, 200) }, { new: true });
+      const updated = await StockRecipe.findByIdAndUpdate(id(clash), { qty, per, makes, note: String(body.note || '').slice(0, 200) }, { new: true });
       return { ...plain(updated), _id: id(updated), replaced: true };
     }
     const created = await StockRecipe.create({
-      toyId: id(toy), processId: id(step), itemId: id(item), qty, per,
+      toyId: id(toy), processId: id(step), itemId: id(item), qty, per, makes,
       note: String(body.note || '').slice(0, 200), createdAt: new Date()
     });
     return { ...plain(created), _id: id(created) };

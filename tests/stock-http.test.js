@@ -145,6 +145,16 @@ test('a recipe line belongs to one work step and is never doubled', async t => {
   assert.equal(forStep.body.recipe[0].processName, 'BOPP packing');
   assert.equal(forStep.body.recipe[0].per, 8);
 
+  // A step can also put something on the shelf, and the line remembers which
+  // way it goes — including when it is corrected later.
+  const made = await request('admin', 'POST', '/recipe', { toyId: 'toy', processId: 'assemble', itemId: box, qty: 1, per: 1, makes: true });
+  assert.equal(made.status, 200);
+  assert.equal(made.body.makes, true);
+  const fixed = await request('admin', 'POST', '/recipe', { toyId: 'toy', processId: 'assemble', itemId: box, qty: 2, per: 1, makes: true });
+  assert.equal(fixed.body.replaced, true);
+  assert.equal(fixed.body.makes, true);
+  assert.equal((await request('admin', 'DELETE', `/recipe/${made.body._id}`)).status, 200);
+
   assert.equal((await request('admin', 'DELETE', `/recipe/${again.body._id}`)).status, 200);
   assert.equal(data.StockRecipe.length, 1);
 });
