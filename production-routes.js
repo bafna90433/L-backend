@@ -753,6 +753,8 @@ function createProductionRouter(options = {}) {
       if (own.length > 0 && own.some(step => flat(step.name) !== flat(toy.name) && modelNames.has(flat(step.name)))) return true;
       return JOB_WORDS.test(String(toy.name)) || JOB_WORDS.test(typeName.get(id(toy.typeId)) || '');
     };
+    // Worked out once: a bench is read for every model's line below.
+    const benchOf = new Map(live.map(toy => [id(toy), isBench(toy)]));
     const madeOn = new Map();
     for (const row of entries.filter(row => within(row.date))) {
       const key = `${id(row.toyId)}|${id(row.processId)}`;
@@ -781,8 +783,18 @@ function createProductionRouter(options = {}) {
       // line of both, and each of them counts packets rather than the pieces
       // inside — 500 packets are 500 helicopters and 500 planes.
       const packed = step => (step.packs || []).find(pack => id(pack.toyId) === id(toy));
+      // The other way a bench is written: the bench carries a copy of the model
+      // by name — "Fighter-jet" under Stickering — and its steps are the jobs
+      // done to it, "Tag joint" and the rest. Read by the step's name alone
+      // those jobs belong to nobody, and the work disappears off the card.
+      // Only a bench is read this way, so a model the catalogue happens to hold
+      // twice does not pour its steps into its twin's line.
+      const copyOf = step => {
+        const bench = live.find(row => id(row) === id(step.toyId));
+        return !!bench && flat(bench.name) === flat(toy.name) && benchOf.get(id(bench)) === true;
+      };
       const packing = steps
-        .filter(step => step.isActive !== false && id(step.toyId) !== id(toy) && (flat(step.name) === flat(toy.name) || packed(step)))
+        .filter(step => step.isActive !== false && id(step.toyId) !== id(toy) && (flat(step.name) === flat(toy.name) || copyOf(step) || packed(step)))
         .sort(order);
       const ordered = [...own, ...packing];
       // The floor decides where a toy is finished: some models end at checking,

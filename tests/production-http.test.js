@@ -667,6 +667,13 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   await request('supervisor', 'POST', '/entries', entry({ toyId: 'pack', processId: 'pack-bird', pieces: 250, enteredByName: 'Ramya' }));
   await request('supervisor', 'POST', '/entries', entry({ toyId: 'check', processId: 'check-bird', pieces: 220, enteredByName: 'Ramya' }));
 
+  // A bench written the third way: a copy of the model by name, under a job
+  // category, with the jobs done to it as its steps.
+  data.ToyType.push({ _id: 'stick', name: 'Stickering', isActive: true });
+  data.Toy.push({ _id: 'stick-bird', name: 'BIRD', typeId: 'stick', isActive: true });
+  data.ToyProcess.push({ _id: 'tag', name: 'Tag joint', toyId: 'stick-bird', sortOrder: 4, isActive: true });
+  await request('supervisor', 'POST', '/entries', entry({ toyId: 'stick-bird', processId: 'tag', pieces: 160, enteredByName: 'Ramya' }));
+
   // A packing bench that holds this model, said by the packet rather than by
   // the step's name: one packet carries two birds.
   data.Toy.push({ _id: 'twin', name: 'Twin packing', typeId: 'type', isActive: true });
@@ -682,7 +689,7 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   const bird = seen.body.toys.find(row => row.id === 'toy');
   assert.equal(bird.intake, 500);
   assert.equal(bird.intakeFrom, 'Body (B1)');
-  assert.deepEqual(bird.steps.map(step => [step.name, step.pieces]), [['Body assembly', 400], ['Wings gumming', 300], ['BIRD', 250], ['Bird', 220], ['Pair pack', 120]]);
+  assert.deepEqual(bird.steps.map(step => [step.name, step.pieces]), [['Body assembly', 400], ['Wings gumming', 300], ['BIRD', 250], ['Bird', 220], ['Pair pack', 120], ['Tag joint', 160]]);
   assert.equal(bird.ready, 120);
   assert.equal(bird.notStarted, 100);
   assert.deepEqual(bird.waiting, [
@@ -701,7 +708,7 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   assert.equal(ends.ready, 300);
   // The benches it still goes to are listed apart, so the work is not lost
   // from the card — and the ready figure the mark was set for does not move.
-  assert.deepEqual(ends.after.map(step => [step.name, step.pieces]), [['BIRD', 250], ['Bird', 220], ['Pair pack', 120]]);
+  assert.deepEqual(ends.after.map(step => [step.name, step.pieces]), [['BIRD', 250], ['Bird', 220], ['Pair pack', 120], ['Tag joint', 160]]);
 
   await request('admin', 'PUT', '/processes/gum', { isFinal: false });
 
