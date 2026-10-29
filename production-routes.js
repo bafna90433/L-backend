@@ -723,8 +723,8 @@ function createProductionRouter(options = {}) {
       const at = new Date(when || 0).getTime();
       return (!since || at >= since.getTime()) && (!until || at <= until.getTime());
     };
-    const [toys, types, steps, entries, damage, items, recipe, moves] = await Promise.all([
-      Toy.find({}), ToyType.find({}), ToyProcess.find({}), ProductionEntry.find({}), DamageEntry.find({}),
+    const [toys, types, steps, entries, damage, parts, items, recipe, moves] = await Promise.all([
+      Toy.find({}), ToyType.find({}), ToyProcess.find({}), ProductionEntry.find({}), DamageEntry.find({}), DamagePart.find({}),
       StockItem ? StockItem.find({}) : [], StockRecipe ? StockRecipe.find({}) : [], StockMove ? StockMove.find({}) : []
     ]);
     const typeName = new Map(types.map(row => [id(row), row.name]));
@@ -824,11 +824,20 @@ function createProductionRouter(options = {}) {
       // problem; "620 of them are the top" tells them where it is.
       const mine = damage.filter(row => flat(row.toyName) === flat(toy.name) && within(row.date));
       const broken = mine.reduce((sum, row) => sum + Number(row.qty || 0), 0);
-      const brokenParts = [...mine.reduce((rows, row) => {
+      // Every part this toy is known to have, and what has broken of it — a
+      // part with nothing against it says so rather than being left out, which
+      // is how the owner sees the whole list and not only the bad news.
+      const rows = new Map();
+      for (const part of parts.filter(part => part.isActive !== false && id(part.toyId) === id(toy))) {
+        rows.set(flat(part.name), { name: part.name, qty: 0 });
+      }
+      for (const row of mine) {
         const name = String(row.partName || 'Not named').trim() || 'Not named';
-        rows.set(flat(name), { name, qty: (rows.get(flat(name))?.qty || 0) + Number(row.qty || 0) });
-        return rows;
-      }, new Map()).values()].sort((a, b) => b.qty - a.qty);
+        const found = rows.get(flat(name)) || { name, qty: 0 };
+        found.qty += Number(row.qty || 0);
+        rows.set(flat(name), found);
+      }
+      const brokenParts = [...rows.values()].sort((a, b) => b.qty - a.qty || a.name.localeCompare(b.name));
       // How many pieces have got past every step up to this one. A step cannot
       // have finished more than the step before it fed to it, whatever the two
       // counts say on their own — so it is the running smallest that follows a
