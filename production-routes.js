@@ -700,7 +700,13 @@ function createProductionRouter(options = {}) {
         return { id: key, name: wm.get(key)?.name || 'Archived worker', gender: wm.get(key)?.gender || 'Male', ...measure(total), regular: subtotal(regular.filter(row => id(row.labourId) === key)), training: subtotal(training.filter(row => id(row.labourId) === key)), ...otOf(key), daysWorked: total.dates.size };
       }).sort((a, b) => b.pieces - a.pieces),
       toys: [...byToy].map(([key, total]) => ({ id: key, name: tm.get(key)?.name || 'Archived toy', ...measure(total) })).sort((a, b) => b.pieces - a.pieces),
-      processes: [...byProcess].map(([key, total]) => ({ id: key, name: pm.get(key)?.name || 'Archived process', toyId: id(pm.get(key)?.toyId), toyName: tm.get(id(pm.get(key)?.toyId))?.name || 'Archived toy', ...measure(total) })).sort((a, b) => b.pieces - a.pieces),
+      processes: [...byProcess].map(([key, total]) => {
+        const name = pm.get(key)?.name || 'Archived process', toyName = tm.get(id(pm.get(key)?.toyId))?.name || 'Archived toy';
+        // Cleaning's "Fighter-jet" is a toy row only because a step needs one
+        // to hang on, and the step carries the same name. Said as a pair it
+        // reads as a duplicate, so whoever prints it is told it is one job.
+        return { id: key, name, toyId: id(pm.get(key)?.toyId), toyName, isTheToyItself: rules.flatName(name) === rules.flatName(toyName), ...measure(total) };
+      }).sort((a, b) => b.pieces - a.pieces),
       records, recordBoard, dailyRecordBoard, dailyRecordsBroken, flags, todayFlags: flags.filter(row => row.date === dayKey(to)).length, processCount: byProcess.size
     };
   };
@@ -970,6 +976,7 @@ function createProductionRouter(options = {}) {
         toyName,
         category: typeName,
         workStepName: step.name,
+        isTheToyItself: rules.flatName(step.name) === rules.flatName(toyName),
         targetPerHour,
         targetPerFemaleShift: Math.round(targetPerHour * shiftMinutesFor({ gender: 'Female' }) / 60),
         targetPerMaleShift: Math.round(targetPerHour * shiftMinutesFor({ gender: 'Male' }) / 60)
@@ -1042,6 +1049,7 @@ function createProductionRouter(options = {}) {
       '- workforce.directory is every active worker on the books; workers[] is only those with production in this period. The two are different numbers and both matter.',
       '- Training work counts in output but is excluded from rankings, flags and records.',
       '- damage is counted separately from production: it is broken pieces, not output.',
+      '- Some models are the job itself — cleaning, checking and packing benches carry a copy of the model whose work step repeats its name, marked isTheToyItself. Name such a job once; never print the same name as both the toy and the work step.',
       '',
       'How to answer:',
       'Give the whole picture, not a headline. Name the people, the toys and the work steps, give the numbers behind each claim, and use a table when there is more than a handful of rows. Say what the numbers suggest doing. Keep it readable on a phone.',
