@@ -699,6 +699,9 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   const ends = short.body.toys.find(row => row.id === 'toy');
   assert.deepEqual(ends.steps.map(step => step.name), ['Body assembly', 'Wings gumming']);
   assert.equal(ends.ready, 300);
+  // The benches it still goes to are listed apart, so the work is not lost
+  // from the card — and the ready figure the mark was set for does not move.
+  assert.deepEqual(ends.after.map(step => [step.name, step.pieces]), [['BIRD', 250], ['Bird', 220], ['Pair pack', 120]]);
 
   await request('admin', 'PUT', '/processes/gum', { isFinal: false });
 

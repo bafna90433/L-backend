@@ -798,7 +798,7 @@ function createProductionRouter(options = {}) {
         const bench = id(ordered[marked].toyId);
         while (ends + 1 < ordered.length && id(ordered[ends + 1].toyId) === bench) ends += 1;
       }
-      const line = (ends >= 0 ? ordered.slice(0, ends + 1) : ordered).map(step => ({
+      const shape = step => ({
         id: id(step),
         name: step.name,
         under: id(step.toyId) === id(toy) ? '' : (live.find(row => id(row) === id(step.toyId))?.name || ''),
@@ -808,7 +808,16 @@ function createProductionRouter(options = {}) {
         underType: id(step.toyId) === id(toy) ? '' : (typeName.get(id(live.find(row => id(row) === id(step.toyId))?.typeId)) || ''),
         imageUrl: step.imageUrl || '',
         pieces: (madeOn.get(`${id(step.toyId)}|${id(step)}`) || 0) * (packed(step) ? Number(packed(step).qty) || 1 : 1)
-      }));
+      });
+      const line = (ends >= 0 ? ordered.slice(0, ends + 1) : ordered).map(shape);
+      // Work the model still goes through after its line is marked finished:
+      // the cleaning or packing bench it is sent to afterwards. It is kept out
+      // of the line, and so out of the running minimum, because the mark was
+      // set to stop the line being read past it — but the floor did record it,
+      // and an owner looking for those pieces should find them. Steps of the
+      // model's own that fall after the mark stay off: a model nested under
+      // another by mistake is exactly what the mark is there to cut.
+      const after = (ends >= 0 ? ordered.slice(ends + 1) : []).filter(step => id(step.toyId) !== id(toy)).map(shape);
 
       // How many pieces the parts on hand could make: the part that runs out
       // first decides it. Packing material is left out — a shortage of boxes
@@ -860,7 +869,7 @@ function createProductionRouter(options = {}) {
       return {
         id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '', isModel: !isBench(toy),
         typeName: typeName.get(id(toy.typeId)) || '',
-        intake, intakeFrom, ready, markedEnd: ends >= 0, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line,
+        intake, intakeFrom, ready, markedEnd: ends >= 0, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line, after,
         // Models that share a packet are read together, so they carry the
         // same key and the page can keep their cards side by side.
         pairKey: (() => {
