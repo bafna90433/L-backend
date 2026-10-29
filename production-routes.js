@@ -802,19 +802,25 @@ function createProductionRouter(options = {}) {
       const packing = steps
         .filter(step => step.isActive !== false && id(step.toyId) !== id(toy) && (flat(step.name) === flat(toy.name) || copyOf(step) || packed(step)))
         .sort(order);
-      const ordered = [...own, ...packing];
-      // The floor decides where a toy is finished: some models end at checking,
-      // some two steps earlier. A step can be marked, or the whole bench it
-      // sits on — "finished once it gets here" — and what comes after the mark
-      // is somebody else's business.
+      // The line is the model's own work — where the parts become the toy and
+      // how far down its own bench it has got. Everything done to it elsewhere
+      // (cleaned, checked, stickered, packed) happens once it is already a toy,
+      // so it is listed apart on every card instead of being mixed into the
+      // running minimum, where one bench with nothing recorded against it would
+      // read as the whole line being stuck.
+      // The floor still decides where the making ends: some models are finished
+      // two steps before their last one, and that step is marked.
+      const stops = own.findIndex(step => step.isFinal === true);
+      // A bench can close the toy too — once it has been through that bench the
+      // rest is somebody else's business — and a marked bench ends after its
+      // own last step, not after its first.
       const closes = step => step.isFinal === true || live.find(row => id(row) === id(step.toyId))?.isFinal === true;
-      const marked = ordered.findIndex(closes);
-      let ends = -1;
-      if (marked >= 0) {
-        // A marked bench ends after its own last step, not after its first.
-        ends = marked;
-        const bench = id(ordered[marked].toyId);
-        while (ends + 1 < ordered.length && id(ordered[ends + 1].toyId) === bench) ends += 1;
+      const sealed = packing.findIndex(closes);
+      let last = -1;
+      if (sealed >= 0) {
+        last = sealed;
+        const bench = id(packing[sealed].toyId);
+        while (last + 1 < packing.length && id(packing[last + 1].toyId) === bench) last += 1;
       }
       const shape = step => ({
         id: id(step),
@@ -827,15 +833,11 @@ function createProductionRouter(options = {}) {
         imageUrl: step.imageUrl || '',
         pieces: (madeOn.get(`${id(step.toyId)}|${id(step)}`) || 0) * (packed(step) ? Number(packed(step).qty) || 1 : 1)
       });
-      const line = (ends >= 0 ? ordered.slice(0, ends + 1) : ordered).map(shape);
-      // Work the model still goes through after its line is marked finished:
-      // the cleaning or packing bench it is sent to afterwards. It is kept out
-      // of the line, and so out of the running minimum, because the mark was
-      // set to stop the line being read past it — but the floor did record it,
-      // and an owner looking for those pieces should find them. Steps of the
-      // model's own that fall after the mark stay off: a model nested under
-      // another by mistake is exactly what the mark is there to cut.
-      const after = (ends >= 0 ? ordered.slice(ends + 1) : []).filter(step => id(step.toyId) !== id(toy)).map(shape);
+      const line = (stops >= 0 ? own.slice(0, stops + 1) : own).map(shape);
+      // The benches it goes to afterwards, on every card. Own steps past the
+      // mark stay off: a model nested under another by mistake is exactly what
+      // the mark is there to cut.
+      const after = (last >= 0 ? packing.slice(0, last + 1) : packing).map(shape);
 
       // How many pieces the parts on hand could make: the part that runs out
       // first decides it. Packing material is left out — a shortage of boxes
@@ -887,7 +889,7 @@ function createProductionRouter(options = {}) {
       return {
         id: id(toy), name: toy.name, imageUrl: toy.imageUrl || '', isModel: !isBench(toy),
         typeName: typeName.get(id(toy.typeId)) || '',
-        intake, intakeFrom, ready, markedEnd: ends >= 0, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line, after,
+        intake, intakeFrom, ready, markedEnd: stops >= 0, damage: broken, damageParts: brokenParts, notStarted, waiting, steps: line, after,
         // Models that share a packet are read together, so they carry the
         // same key and the page can keep their cards side by side.
         pairKey: (() => {

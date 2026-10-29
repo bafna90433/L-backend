@@ -689,14 +689,14 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   const bird = seen.body.toys.find(row => row.id === 'toy');
   assert.equal(bird.intake, 500);
   assert.equal(bird.intakeFrom, 'Body (B1)');
-  assert.deepEqual(bird.steps.map(step => [step.name, step.pieces]), [['Body assembly', 400], ['Wings gumming', 300], ['BIRD', 250], ['Bird', 220], ['Pair pack', 120], ['Tag joint', 160]]);
-  assert.equal(bird.ready, 120);
+  // The line is the model's own making; the benches it is sent to afterwards
+  // are listed apart, on every card and not only on a card that ends early.
+  assert.deepEqual(bird.steps.map(step => [step.name, step.pieces]), [['Body assembly', 400], ['Wings gumming', 300]]);
+  assert.deepEqual(bird.after.map(step => [step.name, step.pieces]), [['BIRD', 250], ['Bird', 220], ['Pair pack', 120], ['Tag joint', 160]]);
+  assert.equal(bird.ready, 300);
   assert.equal(bird.notStarted, 100);
   assert.deepEqual(bird.waiting, [
-    { after: 'Body assembly', before: 'Wings gumming', pieces: 100 },
-    { after: 'Wings gumming', before: 'BIRD', pieces: 50 },
-    { after: 'BIRD', before: 'Bird', pieces: 30 },
-    { after: 'Bird', before: 'Pair pack', pieces: 100 }
+    { after: 'Body assembly', before: 'Wings gumming', pieces: 100 }
   ]);
 
   // Marked as the end of the line, gumming closes it: the packing and checking
@@ -706,8 +706,7 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   const ends = short.body.toys.find(row => row.id === 'toy');
   assert.deepEqual(ends.steps.map(step => step.name), ['Body assembly', 'Wings gumming']);
   assert.equal(ends.ready, 300);
-  // The benches it still goes to are listed apart, so the work is not lost
-  // from the card — and the ready figure the mark was set for does not move.
+  assert.equal(ends.markedEnd, true);
   assert.deepEqual(ends.after.map(step => [step.name, step.pieces]), [['BIRD', 250], ['Bird', 220], ['Pair pack', 120], ['Tag joint', 160]]);
 
   await request('admin', 'PUT', '/processes/gum', { isFinal: false });
@@ -717,8 +716,9 @@ test('HTTP tracking follows a toy down its line and says what is stuck', async t
   await request('admin', 'PUT', '/toys/pack', { isFinal: true });
   const atBench = await request('owner', 'GET', '/tracking');
   const upToPack = atBench.body.toys.find(row => row.id === 'toy');
-  assert.deepEqual(upToPack.steps.map(step => step.name), ['Body assembly', 'Wings gumming', 'BIRD']);
-  assert.equal(upToPack.ready, 250);
+  assert.deepEqual(upToPack.steps.map(step => step.name), ['Body assembly', 'Wings gumming']);
+  assert.deepEqual(upToPack.after.map(step => step.name), ['BIRD']);
+  assert.equal(upToPack.ready, 300);
   await request('admin', 'PUT', '/toys/pack', { isFinal: false });
   // Asked for a day with nothing in it, the same line reads empty — and the
   // shelf's opening count belongs to "from the beginning", not to a window.
