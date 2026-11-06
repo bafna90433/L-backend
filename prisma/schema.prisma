@@ -386,8 +386,6 @@ model ToyType {
 
   toys Toy[]
 
-  @@unique([name, unit])
-
   @@index([sortOrder])
 }
 

@@ -268,9 +268,6 @@ const ToyTypeSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
-// A name is only unique within its own unit: two factories both running a
-// "Packing" bench is two categories, not a clash.
-ToyTypeSchema.index({ name: 1, unit: 1 }, { unique: true });
 
 const ToySchema = new mongoose.Schema({
   typeId: { type: mongoose.Schema.Types.ObjectId, ref: 'ToyType', required: true },
