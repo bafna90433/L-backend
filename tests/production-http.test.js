@@ -236,6 +236,28 @@ test('HTTP catalogue initialization is admin-only, idempotent and preserves arch
   assert.equal((await request('admin', 'POST', '/processes', { name: 'Missing toy' })).status, 400);
 });
 
+test('HTTP a category belongs to a unit, and a name is unique only within it', async t => {
+  const { request, data } = await setup(t);
+  // Saved before units existed, so it carries none.
+  assert.equal(data.ToyType[0].unit, undefined);
+
+  // No unit given reads as the first one — the factory that was already here.
+  const plain = await request('admin', 'POST', '/toy-types', { name: 'Packing' });
+  assert.equal(plain.status, 200);
+  assert.equal(plain.body.unit, 'Unit 1');
+
+  // A second factory can run a bench of the very same name.
+  const second = await request('admin', 'POST', '/toy-types', { name: 'Packing', unit: 'Unit 2' });
+  assert.equal(second.status, 200);
+  assert.equal(second.body.unit, 'Unit 2');
+  assert.notEqual(second.body.id, plain.body.id);
+
+  const masters = await request('owner', 'GET', '/masters');
+  assert.equal(masters.body.types.find(row => row.id === 'type').unit, 'Unit 1');
+  assert.equal(masters.body.types.find(row => row.id === plain.body.id).unit, 'Unit 1');
+  assert.equal(masters.body.types.find(row => row.id === second.body.id).unit, 'Unit 2');
+});
+
 test('HTTP shift settings are stored, applied to available hours and refused when unworkable', async t => {
   const { request, data } = await setup(t);
   t.after(() => require('../production-rules').configureShifts(null));

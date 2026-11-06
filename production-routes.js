@@ -255,7 +255,7 @@ function createProductionRouter(options = {}) {
     const activeToys = toys.filter(row => row.isActive !== false && typeIds.has(id(row.typeId))), toyIds = new Set(activeToys.map(id));
     return {
       features: { training: true, multiWork: true, manualEntryBy: true },
-      types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', stepsOnly: row.stepsOnly === true })),
+      types: types.filter(row => row.isActive !== false).sort(sort).map(row => ({ id: id(row), name: row.name, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', stepsOnly: row.stepsOnly === true, unit: row.unit || 'Unit 1' })),
       toys: activeToys.sort(sort).map(row => ({ id: id(row), typeId: id(row.typeId), name: row.name, code: row.code || '', sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', isFinal: row.isFinal === true })),
       processes: processes.filter(row => row.isActive !== false && toyIds.has(id(row.toyId))).sort(sort).map(row => ({ id: id(row), toyId: id(row.toyId), name: row.name, targetPerHour: row.targetPerHour || 0, target8h: row.target8h || 0, target12h: row.target12h || 0, sortOrder: row.sortOrder || 0, imageUrl: row.imageUrl || '', isFinal: row.isFinal === true, packs: (row.packs || []).map(pack => ({ toyId: id(pack.toyId), qty: Number(pack.qty) || 1 })) })),
       workers: workers.filter(row => row.status === 'active').map(trainingWorkerView).sort((a, b) => a.name.localeCompare(b.name)),
@@ -341,7 +341,7 @@ function createProductionRouter(options = {}) {
     };
   }, true));
   const specs = [
-    { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl', 'stepsOnly'] },
+    { path: 'toy-types', model: ToyType, label: 'category', fields: ['name', 'sortOrder', 'imageUrl', 'stepsOnly', 'unit'] },
     { path: 'toys', model: Toy, label: 'toy', fields: ['name', 'sortOrder', 'code', 'typeId', 'imageUrl', 'isFinal'] },
     { path: 'processes', model: ToyProcess, label: 'process', fields: ['name', 'sortOrder', 'targetPerHour', 'target8h', 'target12h', 'toyId', 'imageUrl', 'packs', 'isFinal'] },
     { path: 'damage-parts', model: DamagePart, label: 'damaged part', fields: ['name', 'toyId'] }
@@ -432,6 +432,9 @@ function createProductionRouter(options = {}) {
     if (data.sortOrder !== undefined) integer(data.sortOrder, 'Sort order');
     if (data.stepsOnly !== undefined) data.stepsOnly = data.stepsOnly === true;
     if (data.isFinal !== undefined) data.isFinal = data.isFinal === true;
+    // Which factory a category belongs to. Blank reads as the first unit, the
+    // same as a category saved before units existed at all.
+    if (spec.path === 'toy-types') data.unit = String(merged.unit || '').trim().slice(0, 40) || 'Unit 1';
     // Only a link, and only to somewhere the app itself put the file: a stored
     // address is handed straight to a browser as an image source.
     if (data.imageUrl !== undefined) {

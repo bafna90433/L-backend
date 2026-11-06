@@ -253,7 +253,7 @@ const DeletedLogSchema = new mongoose.Schema({
 /* ---------------- Toy production ---------------- */
 
 const ToyTypeSchema = new mongoose.Schema({
-  name: { type: String, required: true, unique: true },
+  name: { type: String, required: true },
   sortOrder: { type: Number, default: 0 },
   // Some categories are a job rather than a shelf of models — cleaning is done
   // to everything and belongs to no toy. Those hold their work steps directly,
@@ -261,9 +261,16 @@ const ToyTypeSchema = new mongoose.Schema({
   stepsOnly: { type: Boolean, default: false },
   // A photo of it, parked on ImageKit. Blank until somebody uploads one.
   imageUrl: { type: String, default: '' },
+  // Which factory this category belongs to. A toy and its work steps are
+  // never tagged themselves — the category they sit under already says it,
+  // the same way a toy already says which category it is in.
+  unit: { type: String, default: 'Unit 1' },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
+// A name is only unique within its own unit: two factories both running a
+// "Packing" bench is two categories, not a clash.
+ToyTypeSchema.index({ name: 1, unit: 1 }, { unique: true });
 
 const ToySchema = new mongoose.Schema({
   typeId: { type: mongoose.Schema.Types.ObjectId, ref: 'ToyType', required: true },

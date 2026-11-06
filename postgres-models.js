@@ -88,7 +88,7 @@ const specs = {
   },
   ToyType: {
     delegate: 'toyType',
-    fields: ['name', 'sortOrder', 'imageUrl', 'stepsOnly', 'isActive', 'createdAt']
+    fields: ['name', 'sortOrder', 'imageUrl', 'stepsOnly', 'unit', 'isActive', 'createdAt']
   },
   Toy: {
     delegate: 'toy',
